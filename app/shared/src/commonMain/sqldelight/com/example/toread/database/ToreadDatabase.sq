@@ -1,0 +1,270 @@
+CREATE TABLE local_books (
+    id TEXT NOT NULL PRIMARY KEY,
+    book_hash TEXT NOT NULL UNIQUE,
+    title TEXT NOT NULL,
+    author TEXT,
+    format TEXT NOT NULL,
+    file_path TEXT NOT NULL,
+    cover_path TEXT,
+    file_size INTEGER NOT NULL DEFAULT 0,
+    metadata_json TEXT NOT NULL DEFAULT '{}',
+    reading_status TEXT NOT NULL DEFAULT 'unread',
+    last_read_at TEXT,
+    sync_status TEXT NOT NULL DEFAULT 'pending',
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    archived_at TEXT
+);
+
+CREATE INDEX local_books_book_hash_index ON local_books(book_hash);
+CREATE INDEX local_books_sync_status_index ON local_books(sync_status);
+CREATE INDEX local_books_updated_at_index ON local_books(updated_at);
+
+CREATE TABLE local_progress (
+    id TEXT NOT NULL PRIMARY KEY,
+    book_hash TEXT NOT NULL UNIQUE,
+    format TEXT NOT NULL,
+    locator_json TEXT NOT NULL,
+    progress REAL NOT NULL DEFAULT 0.0,
+    device_id TEXT,
+    sync_status TEXT NOT NULL DEFAULT 'pending',
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    FOREIGN KEY(book_hash) REFERENCES local_books(book_hash) ON DELETE CASCADE
+);
+
+CREATE INDEX local_progress_book_hash_index ON local_progress(book_hash);
+CREATE INDEX local_progress_sync_status_index ON local_progress(sync_status);
+CREATE INDEX local_progress_updated_at_index ON local_progress(updated_at);
+
+CREATE TABLE local_bookmarks (
+    id TEXT NOT NULL PRIMARY KEY,
+    book_hash TEXT NOT NULL,
+    locator_json TEXT NOT NULL,
+    title TEXT,
+    excerpt TEXT,
+    sync_status TEXT NOT NULL DEFAULT 'pending',
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    deleted_at TEXT,
+    FOREIGN KEY(book_hash) REFERENCES local_books(book_hash) ON DELETE CASCADE
+);
+
+CREATE INDEX local_bookmarks_book_hash_index ON local_bookmarks(book_hash);
+CREATE INDEX local_bookmarks_sync_status_index ON local_bookmarks(sync_status);
+CREATE INDEX local_bookmarks_updated_at_index ON local_bookmarks(updated_at);
+CREATE INDEX local_bookmarks_deleted_at_index ON local_bookmarks(deleted_at);
+
+CREATE TABLE local_notes (
+    id TEXT NOT NULL PRIMARY KEY,
+    book_hash TEXT NOT NULL,
+    locator_json TEXT NOT NULL,
+    selected_text TEXT,
+    note_text TEXT NOT NULL,
+    color TEXT,
+    sync_status TEXT NOT NULL DEFAULT 'pending',
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    deleted_at TEXT,
+    FOREIGN KEY(book_hash) REFERENCES local_books(book_hash) ON DELETE CASCADE
+);
+
+CREATE INDEX local_notes_book_hash_index ON local_notes(book_hash);
+CREATE INDEX local_notes_sync_status_index ON local_notes(sync_status);
+CREATE INDEX local_notes_updated_at_index ON local_notes(updated_at);
+CREATE INDEX local_notes_deleted_at_index ON local_notes(deleted_at);
+
+CREATE TABLE sync_queue (
+    id TEXT NOT NULL PRIMARY KEY,
+    entity_type TEXT NOT NULL,
+    entity_id TEXT NOT NULL,
+    action TEXT NOT NULL,
+    payload_json TEXT NOT NULL,
+    sync_status TEXT NOT NULL DEFAULT 'pending',
+    retry_count INTEGER NOT NULL DEFAULT 0,
+    last_error TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    next_retry_at TEXT
+);
+
+CREATE INDEX sync_queue_status_retry_index ON sync_queue(sync_status, next_retry_at);
+CREATE INDEX sync_queue_entity_index ON sync_queue(entity_type, entity_id);
+CREATE INDEX sync_queue_updated_at_index ON sync_queue(updated_at);
+
+CREATE TABLE settings (
+    key TEXT NOT NULL PRIMARY KEY,
+    value TEXT NOT NULL,
+    sync_status TEXT NOT NULL DEFAULT 'local',
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+
+CREATE INDEX settings_sync_status_index ON settings(sync_status);
+CREATE INDEX settings_updated_at_index ON settings(updated_at);
+
+selectAllBooks:
+SELECT *
+FROM local_books
+WHERE archived_at IS NULL
+ORDER BY COALESCE(last_read_at, updated_at) DESC;
+
+selectBookByHash:
+SELECT *
+FROM local_books
+WHERE book_hash = ?;
+
+insertBook:
+INSERT INTO local_books(
+    id,
+    book_hash,
+    title,
+    author,
+    format,
+    file_path,
+    cover_path,
+    file_size,
+    metadata_json,
+    reading_status,
+    last_read_at,
+    sync_status,
+    created_at,
+    updated_at,
+    archived_at
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+
+updateBookSyncStatus:
+UPDATE local_books
+SET sync_status = ?, updated_at = ?
+WHERE book_hash = ?;
+
+selectProgressByBookHash:
+SELECT *
+FROM local_progress
+WHERE book_hash = ?;
+
+insertProgress:
+INSERT INTO local_progress(
+    id,
+    book_hash,
+    format,
+    locator_json,
+    progress,
+    device_id,
+    sync_status,
+    created_at,
+    updated_at
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?);
+
+updateProgress:
+UPDATE local_progress
+SET locator_json = ?,
+    progress = ?,
+    device_id = ?,
+    sync_status = ?,
+    updated_at = ?
+WHERE book_hash = ?;
+
+selectActiveBookmarksByBookHash:
+SELECT *
+FROM local_bookmarks
+WHERE book_hash = ? AND deleted_at IS NULL
+ORDER BY created_at ASC;
+
+insertBookmark:
+INSERT INTO local_bookmarks(
+    id,
+    book_hash,
+    locator_json,
+    title,
+    excerpt,
+    sync_status,
+    created_at,
+    updated_at,
+    deleted_at
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?);
+
+softDeleteBookmark:
+UPDATE local_bookmarks
+SET deleted_at = ?,
+    sync_status = ?,
+    updated_at = ?
+WHERE id = ?;
+
+selectActiveNotesByBookHash:
+SELECT *
+FROM local_notes
+WHERE book_hash = ? AND deleted_at IS NULL
+ORDER BY created_at ASC;
+
+insertNote:
+INSERT INTO local_notes(
+    id,
+    book_hash,
+    locator_json,
+    selected_text,
+    note_text,
+    color,
+    sync_status,
+    created_at,
+    updated_at,
+    deleted_at
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+
+softDeleteNote:
+UPDATE local_notes
+SET deleted_at = ?,
+    sync_status = ?,
+    updated_at = ?
+WHERE id = ?;
+
+selectPendingSyncQueue:
+SELECT *
+FROM sync_queue
+WHERE sync_status = 'pending'
+  AND (next_retry_at IS NULL OR next_retry_at <= ?)
+ORDER BY created_at ASC;
+
+insertSyncQueueItem:
+INSERT INTO sync_queue(
+    id,
+    entity_type,
+    entity_id,
+    action,
+    payload_json,
+    sync_status,
+    retry_count,
+    last_error,
+    created_at,
+    updated_at,
+    next_retry_at
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+
+markSyncQueueItemDone:
+UPDATE sync_queue
+SET sync_status = 'synced',
+    updated_at = ?
+WHERE id = ?;
+
+markSyncQueueItemFailed:
+UPDATE sync_queue
+SET sync_status = 'failed',
+    retry_count = retry_count + 1,
+    last_error = ?,
+    updated_at = ?,
+    next_retry_at = ?
+WHERE id = ?;
+
+getSetting:
+SELECT *
+FROM settings
+WHERE key = ?;
+
+upsertSetting:
+INSERT OR REPLACE INTO settings(
+    key,
+    value,
+    sync_status,
+    created_at,
+    updated_at
+) VALUES (?, ?, ?, ?, ?);
