@@ -9,7 +9,7 @@ import java.security.MessageDigest
 
 actual class PlatformFilePicker actual constructor() {
     actual suspend fun pickFiles(extensions: List<String>): List<PlatformFile> {
-        val dialog = FileDialog(null as Frame?, "Import local books", FileDialog.LOAD).apply {
+        val dialog = FileDialog(null as Frame?, "导入本地书籍", FileDialog.LOAD).apply {
             isMultipleMode = true
             file = extensions.joinToString(";") { "*.$it" }
             isVisible = true

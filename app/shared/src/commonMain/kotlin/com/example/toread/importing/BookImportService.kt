@@ -67,9 +67,11 @@ class BookImportService(
 }
 
 fun createBookImportService(): BookImportService {
-    val database = ToreadDatabase(DatabaseDriverFactory().createDriver())
-    return BookImportService(database)
+    return BookImportService(createToreadDatabase())
 }
+
+fun createToreadDatabase(): ToreadDatabase =
+    ToreadDatabase(DatabaseDriverFactory().createDriver())
 
 sealed interface BookImportResult {
     data class Imported(
@@ -96,20 +98,20 @@ private sealed interface ImportFileValidation {
 
 private fun validateImportFile(file: PlatformFile): ImportFileValidation {
     val extension = file.extension()
-        ?: return ImportFileValidation.Invalid("Missing file extension")
+        ?: return ImportFileValidation.Invalid("缺少文件扩展名")
 
     if (extension !in supportedExtensions) {
-        return ImportFileValidation.Invalid("Unsupported file extension: .$extension")
+        return ImportFileValidation.Invalid("暂不支持 .$extension 文件")
     }
 
     val mimeType = file.mimeType?.lowercase()?.substringBefore(";")?.trim()
     val isKnownCompatibleMime = mimeType == null ||
         mimeType.isBlank() ||
         mimeType == "application/octet-stream" ||
-        mimeType in acceptedMimeTypes(extension)
+        isAcceptedMimeType(extension, mimeType)
 
     if (!isKnownCompatibleMime) {
-        return ImportFileValidation.Invalid("Unsupported MIME type: $mimeType")
+        return ImportFileValidation.Invalid("文件 MIME 类型不匹配：$mimeType")
     }
 
     return ImportFileValidation.Valid(extension)
@@ -123,11 +125,17 @@ private fun PlatformFile.extension(): String? {
         ?.lowercase()
 }
 
-private fun acceptedMimeTypes(extension: String): Set<String> = when (extension) {
-    "epub" -> setOf("application/epub+zip", "application/x-epub+zip")
-    "pdf" -> setOf("application/pdf")
-    "txt" -> setOf("text/plain", "text/*")
-    else -> emptySet()
+private fun isAcceptedMimeType(extension: String, mimeType: String): Boolean = when (extension) {
+    "epub" -> mimeType in setOf(
+        "application/epub+zip",
+        "application/x-epub+zip",
+        "application/zip",
+        "application/x-zip",
+        "application/x-zip-compressed",
+    )
+    "pdf" -> mimeType == "application/pdf"
+    "txt" -> mimeType == "text/plain" || mimeType.startsWith("text/")
+    else -> false
 }
 
 data class BookMetadata(
@@ -144,7 +152,7 @@ class BasicBookMetadataParser : BookMetadataParser {
     override suspend fun parse(file: PlatformFile, extension: String): BookMetadata {
         val fallbackTitle = file.displayName
             .substringBeforeLast('.', missingDelimiterValue = file.displayName)
-            .ifBlank { "Untitled" }
+            .ifBlank { "未命名" }
         return BookMetadata(
             title = fallbackTitle,
             author = null,

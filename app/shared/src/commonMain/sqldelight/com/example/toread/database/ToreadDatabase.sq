@@ -138,6 +138,12 @@ UPDATE local_books
 SET sync_status = ?, updated_at = ?
 WHERE book_hash = ?;
 
+updateBookLastReadAt:
+UPDATE local_books
+SET last_read_at = ?,
+    reading_status = 'reading'
+WHERE book_hash = ?;
+
 selectProgressByBookHash:
 SELECT *
 FROM local_progress
