@@ -4,6 +4,8 @@ import android.database.Cursor
 import android.net.Uri
 import android.os.Bundle
 import android.provider.OpenableColumns
+import android.view.WindowInsets
+import android.view.WindowInsetsController
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
@@ -13,6 +15,7 @@ import androidx.compose.ui.tooling.preview.Preview
 import com.example.toread.database.AndroidAppContext
 import com.example.toread.platform.AndroidFileAccessBridge
 import com.example.toread.platform.AndroidPlatformFilePickerBridge
+import com.example.toread.platform.AndroidSystemBarsBridge
 import com.example.toread.platform.PlatformFile
 import kotlinx.coroutines.CompletableDeferred
 
@@ -39,6 +42,15 @@ class MainActivity : ComponentActivity() {
             pendingPick = deferred
             openBookFiles.launch(extensions.toMimeTypes())
             deferred.await()
+        }
+        AndroidSystemBarsBridge.hideSystemBars = {
+            window.insetsController?.let { controller ->
+                controller.systemBarsBehavior = WindowInsetsController.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
+                controller.hide(WindowInsets.Type.statusBars() or WindowInsets.Type.navigationBars())
+            }
+        }
+        AndroidSystemBarsBridge.showSystemBars = {
+            window.insetsController?.show(WindowInsets.Type.statusBars() or WindowInsets.Type.navigationBars())
         }
 
         setContent {
