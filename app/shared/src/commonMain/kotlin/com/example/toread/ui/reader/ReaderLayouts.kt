@@ -303,22 +303,32 @@ private fun ReaderTextPage(
     bodyLineHeight: TextUnit,
 ) {
     val pageLines = page.lines.ifEmpty {
-        listOf(ReaderPageLine(page.startOffset, page.endOffset, shouldJustify = false))
+        listOf(
+            ReaderTextLineInfo(
+                startOffset = page.startOffset,
+                endOffset = page.endOffset,
+                chapterOrd = page.chapterOrd,
+                chapterTitle = page.chapterTitle,
+                lineHeightPx = with(LocalDensity.current) { bodyLineHeight.toPx() },
+            ),
+        )
     }
 
     BoxWithConstraints(modifier = modifier.clipToBounds()) {
         val density = LocalDensity.current
-        val lineHeightPx = with(density) { bodyLineHeight.toPx() }
         val availableHeightPx = with(density) { maxHeight.toPx() }
+        val totalLineHeightPx = pageLines.fold(0f) { sum, line ->
+            sum + line.lineHeightPx.coerceAtLeast(with(density) { bodyLineHeight.toPx() } * 0.5f)
+        }
+        val baseLineHeightPx = with(density) { bodyLineHeight.toPx() }
         val rawExtraGapPx = if (pageLines.size > 1) {
-            (availableHeightPx - lineHeightPx * pageLines.size) / (pageLines.size - 1)
+            (availableHeightPx - totalLineHeightPx) / (pageLines.size - 1)
         } else {
             0f
         }
         val extraLineGapPx = rawExtraGapPx
-            .takeIf { it > 0f && it <= lineHeightPx * 0.75f }
+            .takeIf { it > 0f && it <= baseLineHeightPx * 0.75f }
             ?: 0f
-        val lineHeightDp = with(density) { lineHeightPx.toDp() }
         val extraLineGapDp = with(density) { extraLineGapPx.toDp() }
 
         Column(
@@ -327,12 +337,17 @@ private fun ReaderTextPage(
         ) {
             pageLines.forEach { line ->
                 val lineText = line.textFrom(sourceText)
+                val lineHeightDp = with(density) {
+                    line.lineHeightPx.coerceAtLeast(baseLineHeightPx * 0.5f).toDp()
+                }
                 if (lineText.isBlank()) {
                     Box(modifier = Modifier.fillMaxWidth().height(lineHeightDp))
                 } else {
                     ReaderTextLine(
                         text = lineText,
+                        tokens = line.tokens,
                         shouldJustify = line.shouldJustify,
+                        firstLineIndentPx = line.firstLineIndentPx,
                         textColor = textColor,
                         bodyFontSize = bodyFontSize,
                         bodyLineHeight = bodyLineHeight,
@@ -347,22 +362,27 @@ private fun ReaderTextPage(
 @Composable
 private fun ReaderTextLine(
     text: String,
+    tokens: List<String>,
     shouldJustify: Boolean,
+    firstLineIndentPx: Float,
     textColor: Color,
     bodyFontSize: TextUnit,
     bodyLineHeight: TextUnit,
     lineHeight: androidx.compose.ui.unit.Dp,
 ) {
-    val canJustify = shouldJustify && text.length > 1
+    val density = LocalDensity.current
+    val indent = with(density) { firstLineIndentPx.toDp() }
+    val justifyTokens = tokens.ifEmpty { text.map { it.toString() } }
+    val canJustify = shouldJustify && justifyTokens.size > 1
     if (canJustify) {
         Row(
             modifier = Modifier.fillMaxWidth().height(lineHeight),
             horizontalArrangement = Arrangement.SpaceBetween,
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            text.forEach { char ->
+            justifyTokens.forEach { token ->
                 Text(
-                    text = char.toString(),
+                    text = token,
                     color = textColor,
                     fontSize = bodyFontSize,
                     lineHeight = bodyLineHeight,
@@ -384,6 +404,7 @@ private fun ReaderTextLine(
                 fontSize = bodyFontSize,
                 lineHeight = bodyLineHeight,
                 letterSpacing = 0.sp,
+                modifier = Modifier.padding(start = indent),
                 maxLines = 1,
                 softWrap = false,
                 overflow = TextOverflow.Clip,
