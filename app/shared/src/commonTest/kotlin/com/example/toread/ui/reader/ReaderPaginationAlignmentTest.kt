@@ -32,10 +32,8 @@ class ReaderPaginationAlignmentTest {
         assertTrue(lines.any { it.isParagraphFirst })
         assertTrue(lines.any { it.isParagraphLast })
         assertTrue(lines.filter { it.shouldJustify }.all { line ->
-            !line.isParagraphFirst &&
-                !line.isParagraphLast &&
-                line.fillRatio >= spec.justifyMinFillRatio &&
-                line.tokens.size >= 6
+            line.tokens.size > 1 &&
+                (line.extraTokenSpacingPx != 0f || line.adjustedWidthPxForTest() <= line.availableWidthPx + 0.5f)
         })
         assertTrue(lines.all { line ->
             line.startOffset in 0..source.length && line.endOffset in line.startOffset..source.length
@@ -76,4 +74,58 @@ class ReaderPaginationAlignmentTest {
         assertTrue(firstChapterLine.isParagraphFirst)
         assertTrue(firstChapterLine.firstLineIndentPx > 0f)
     }
+
+    @Test
+    fun trailingPunctuationOverflowBreaksToNextLineBeforeSpacingAdjustment() = runBlocking {
+        val source = "第一章 测试\n前文前文前文。"
+        val document = ReaderDocument(title = "测试", format = "txt", text = source)
+        val spec = ReaderPaginationSpec(
+            fallbackTitle = "测试",
+            bodyWidthPx = 170,
+            bodyHeightPx = 180,
+            fontPx = 20f,
+            lineHeightPx = 32f,
+            linesPerPage = 5,
+        )
+
+        val lines = document.paginateForReader(spec).flatMap { it.lines }
+        val punctuationLine = lines.first { it.text.endsWith("。") }
+
+        assertTrue(punctuationLine.widthPx <= punctuationLine.availableWidthPx + 0.5f)
+        assertFalse(punctuationLine.extraTokenSpacingPx < 0f)
+        assertTrue(punctuationLine.adjustedWidthPxForTest() <= punctuationLine.availableWidthPx + 0.5f)
+    }
+
+    @Test
+    fun pageHeightOverflowMovesLineToNextPageBeforeSpacingAdjustment() = runBlocking {
+        val source = listOf(
+            "第一章 测试",
+            "第一段第一段第一段第一段第一段第一段。",
+            "",
+            "第二段第二段第二段第二段第二段第二段。",
+        ).joinToString("\n")
+        val document = ReaderDocument(title = "测试", format = "txt", text = source)
+        val spec = ReaderPaginationSpec(
+            fallbackTitle = "测试",
+            bodyWidthPx = 120,
+            bodyHeightPx = 84,
+            fontPx = 20f,
+            lineHeightPx = 32f,
+            linesPerPage = 10,
+        )
+
+        val pages = document.paginateForReader(spec)
+
+        assertTrue(pages.size > 1)
+        assertTrue(pages.all { page ->
+            page.lines.fold(0f) { sum, line -> sum + line.lineHeightPx } <= spec.bodyHeightPx + 0.5f
+        })
+    }
 }
+
+private fun ReaderTextLineInfo.adjustedWidthPxForTest(): Float =
+    widthPx + if (shouldJustify && tokens.size > 1) {
+        extraTokenSpacingPx * (tokens.size - 1)
+    } else {
+        0f
+    }

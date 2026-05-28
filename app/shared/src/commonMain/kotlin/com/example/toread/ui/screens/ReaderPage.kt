@@ -33,6 +33,7 @@ import com.example.toread.Platform
 import com.example.toread.PlatformKind
 import com.example.toread.library.BookshelfBook
 import com.example.toread.library.BookshelfRepository
+import com.example.toread.platform.PlatformBackHandler
 import com.example.toread.platform.SystemBarsController
 import com.example.toread.progress.ReadingProgressRepository
 import com.example.toread.reader.BookLocator
@@ -74,6 +75,28 @@ internal fun ReaderPage(
     var paginationComplete by remember(book?.bookHash) { mutableStateOf(false) }
     var desktopReaderFocusReady by remember(book?.bookHash) { mutableStateOf(false) }
     val focusRequester = remember { FocusRequester() }
+
+    fun exitReaderWithoutProgress() {
+        if (isAndroid) SystemBarsController.showSystemBars()
+        onBack()
+    }
+
+    PlatformBackHandler(enabled = isAndroid) {
+        val currentBook = book
+        if (currentBook != null && measuredPages.isNotEmpty()) {
+            val targetPage = pageIndex.coerceIn(0, measuredPages.lastIndex.coerceAtLeast(0))
+            saveReaderProgress(
+                scope = scope,
+                progressRepository = progressRepository,
+                book = currentBook,
+                pageIndex = targetPage,
+                pageCount = measuredPages.size,
+                charOffset = measuredPages.getOrNull(targetPage)?.startOffset ?: 0,
+                deviceId = platform.name,
+            )
+        }
+        exitReaderWithoutProgress()
+    }
 
     LaunchedEffect(book?.bookHash) {
         if (book == null) return@LaunchedEffect
@@ -118,10 +141,6 @@ internal fun ReaderPage(
     }
 
     val loadedDocument = document
-    fun exitReaderWithoutProgress() {
-        if (isAndroid) SystemBarsController.showSystemBars()
-        onBack()
-    }
 
     val readerModifier = Modifier
         .fillMaxSize()

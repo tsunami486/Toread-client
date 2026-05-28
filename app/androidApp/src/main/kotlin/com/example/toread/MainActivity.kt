@@ -6,6 +6,7 @@ import android.os.Bundle
 import android.provider.OpenableColumns
 import android.view.WindowInsets
 import android.view.WindowInsetsController
+import androidx.activity.OnBackPressedCallback
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
@@ -13,6 +14,7 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.tooling.preview.Preview
 import com.example.toread.database.AndroidAppContext
+import com.example.toread.platform.AndroidBackHandlerBridge
 import com.example.toread.platform.AndroidFileAccessBridge
 import com.example.toread.platform.AndroidPlatformFilePickerBridge
 import com.example.toread.platform.AndroidSystemBarsBridge
@@ -30,8 +32,8 @@ class MainActivity : ComponentActivity() {
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
-        enableEdgeToEdge()
         super.onCreate(savedInstanceState)
+        enableEdgeToEdge()
 
         AndroidAppContext.initialize(applicationContext)
         AndroidFileAccessBridge.openInputStream = { file ->
@@ -52,6 +54,18 @@ class MainActivity : ComponentActivity() {
         AndroidSystemBarsBridge.showSystemBars = {
             window.insetsController?.show(WindowInsets.Type.statusBars() or WindowInsets.Type.navigationBars())
         }
+        onBackPressedDispatcher.addCallback(
+            this,
+            object : OnBackPressedCallback(true) {
+                override fun handleOnBackPressed() {
+                    if (AndroidBackHandlerBridge.dispatchBack()) return
+
+                    isEnabled = false
+                    onBackPressedDispatcher.onBackPressed()
+                    isEnabled = true
+                }
+            },
+        )
 
         setContent {
             App()

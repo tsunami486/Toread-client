@@ -5,7 +5,6 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.BoxScope
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -29,6 +28,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.layout.Layout
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
@@ -141,8 +141,8 @@ internal fun AndroidReaderLayout(
     val systemBarInsets = rememberSystemBarInsets()
     val topInset = systemBarInsets.top
     val bottomInset = systemBarInsets.bottom
-    val readerTopPadding = if (controlsVisible) 24.dp + topInset else 24.dp
-    val readerBottomPadding = if (controlsVisible) 24.dp + bottomInset else 24.dp
+    val readerTopPadding = if (controlsVisible) 20.dp + topInset else 20.dp
+    val readerBottomPadding = if (controlsVisible) 20.dp + bottomInset else 20.dp
     val leftTapSource = remember { MutableInteractionSource() }
     val centerTapSource = remember { MutableInteractionSource() }
     val rightTapSource = remember { MutableInteractionSource() }
@@ -160,8 +160,8 @@ internal fun AndroidReaderLayout(
                     bottom = readerBottomPadding,
                 ),
             textColor = MaterialTheme.colorScheme.onBackground,
-            bodyFontSize = 28.sp,
-            bodyLineHeight = 46.sp,
+            bodyFontSize = 20.sp,
+            bodyLineHeight = 25.sp,
         )
 
         Row(modifier = Modifier.fillMaxSize()) {
@@ -314,50 +314,82 @@ private fun ReaderTextPage(
         )
     }
 
-    BoxWithConstraints(modifier = modifier.clipToBounds()) {
-        val density = LocalDensity.current
-        val availableHeightPx = with(density) { maxHeight.toPx() }
-        val totalLineHeightPx = pageLines.fold(0f) { sum, line ->
-            sum + line.lineHeightPx.coerceAtLeast(with(density) { bodyLineHeight.toPx() } * 0.5f)
+    val density = LocalDensity.current
+    val baseLineHeightPx = with(density) { bodyLineHeight.toPx() }
+    val renderLines = pageLines.map { line ->
+        val lineHeightPx = line.lineHeightPx.coerceAtLeast(baseLineHeightPx * 0.5f)
+        ReaderRenderLine(
+            line = line,
+            text = line.textFrom(sourceText),
+            lineHeightPx = lineHeightPx,
+            lineHeightDp = with(density) { lineHeightPx.toDp() },
+        )
+    }
+
+    Layout(
+        modifier = modifier
+            .fillMaxSize()
+            .clipToBounds(),
+        content = {
+            renderLines.forEach { renderLine ->
+                if (renderLine.text.isBlank()) {
+                    Box(modifier = Modifier.fillMaxWidth().height(renderLine.lineHeightDp))
+                } else {
+                    ReaderTextLine(
+                        text = renderLine.text,
+                        tokens = renderLine.line.tokens,
+                        shouldJustify = renderLine.line.shouldJustify,
+                        firstLineIndentPx = renderLine.line.firstLineIndentPx,
+                        extraTokenSpacingPx = renderLine.line.extraTokenSpacingPx,
+                        textColor = textColor,
+                        bodyFontSize = bodyFontSize,
+                        bodyLineHeight = bodyLineHeight,
+                        lineHeight = renderLine.lineHeightDp,
+                    )
+                }
+            }
+        },
+    ) { measurables, constraints ->
+        val lineHeightsPx = renderLines.map { line ->
+            line.lineHeightPx.roundToInt().coerceAtLeast(1)
         }
-        val baseLineHeightPx = with(density) { bodyLineHeight.toPx() }
-        val rawExtraGapPx = if (pageLines.size > 1) {
-            (availableHeightPx - totalLineHeightPx) / (pageLines.size - 1)
+        val totalLineHeightPx = lineHeightsPx.sum()
+        val rawExtraGapPx = if (lineHeightsPx.size > 1) {
+            (constraints.maxHeight - totalLineHeightPx).toFloat() / (lineHeightsPx.size - 1)
         } else {
             0f
         }
         val extraLineGapPx = rawExtraGapPx
             .takeIf { it > 0f && it <= baseLineHeightPx * 0.75f }
             ?: 0f
-        val extraLineGapDp = with(density) { extraLineGapPx.toDp() }
+        val placeables = measurables.mapIndexed { index, measurable ->
+            val lineHeightPx = lineHeightsPx.getOrElse(index) { baseLineHeightPx.roundToInt().coerceAtLeast(1) }
+            measurable.measure(
+                constraints.copy(
+                    minWidth = constraints.maxWidth,
+                    maxWidth = constraints.maxWidth,
+                    minHeight = lineHeightPx,
+                    maxHeight = lineHeightPx,
+                ),
+            )
+        }
 
-        Column(
-            modifier = Modifier.fillMaxSize(),
-            verticalArrangement = Arrangement.spacedBy(extraLineGapDp),
-        ) {
-            pageLines.forEach { line ->
-                val lineText = line.textFrom(sourceText)
-                val lineHeightDp = with(density) {
-                    line.lineHeightPx.coerceAtLeast(baseLineHeightPx * 0.5f).toDp()
-                }
-                if (lineText.isBlank()) {
-                    Box(modifier = Modifier.fillMaxWidth().height(lineHeightDp))
-                } else {
-                    ReaderTextLine(
-                        text = lineText,
-                        tokens = line.tokens,
-                        shouldJustify = line.shouldJustify,
-                        firstLineIndentPx = line.firstLineIndentPx,
-                        textColor = textColor,
-                        bodyFontSize = bodyFontSize,
-                        bodyLineHeight = bodyLineHeight,
-                        lineHeight = lineHeightDp,
-                    )
-                }
+        layout(width = constraints.maxWidth, height = constraints.maxHeight) {
+            var y = 0f
+            placeables.forEach { placeable ->
+                placeable.placeRelative(0, y.roundToInt())
+                y += placeable.height + extraLineGapPx
             }
         }
     }
 }
+
+private data class ReaderRenderLine(
+    val line: ReaderTextLineInfo,
+    val text: String,
+    val lineHeightPx: Float,
+    val lineHeightDp: androidx.compose.ui.unit.Dp,
+)
 
 @Composable
 private fun ReaderTextLine(
@@ -365,6 +397,7 @@ private fun ReaderTextLine(
     tokens: List<String>,
     shouldJustify: Boolean,
     firstLineIndentPx: Float,
+    extraTokenSpacingPx: Float,
     textColor: Color,
     bodyFontSize: TextUnit,
     bodyLineHeight: TextUnit,
@@ -375,24 +408,15 @@ private fun ReaderTextLine(
     val justifyTokens = tokens.ifEmpty { text.map { it.toString() } }
     val canJustify = shouldJustify && justifyTokens.size > 1
     if (canJustify) {
-        Row(
-            modifier = Modifier.fillMaxWidth().height(lineHeight),
-            horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            justifyTokens.forEach { token ->
-                Text(
-                    text = token,
-                    color = textColor,
-                    fontSize = bodyFontSize,
-                    lineHeight = bodyLineHeight,
-                    letterSpacing = 0.sp,
-                    maxLines = 1,
-                    softWrap = false,
-                    overflow = TextOverflow.Clip,
-                )
-            }
-        }
+        ReaderJustifiedLine(
+            tokens = justifyTokens,
+            indentPx = firstLineIndentPx,
+            estimatedTokenSpacingPx = extraTokenSpacingPx,
+            textColor = textColor,
+            bodyFontSize = bodyFontSize,
+            bodyLineHeight = bodyLineHeight,
+            lineHeight = lineHeight,
+        )
     } else {
         Box(
             modifier = Modifier.fillMaxWidth().height(lineHeight),
@@ -409,6 +433,55 @@ private fun ReaderTextLine(
                 softWrap = false,
                 overflow = TextOverflow.Clip,
             )
+        }
+    }
+}
+
+@Composable
+private fun ReaderJustifiedLine(
+    tokens: List<String>,
+    indentPx: Float,
+    estimatedTokenSpacingPx: Float,
+    textColor: Color,
+    bodyFontSize: TextUnit,
+    bodyLineHeight: TextUnit,
+    lineHeight: androidx.compose.ui.unit.Dp,
+) {
+    Layout(
+        modifier = Modifier.fillMaxWidth().height(lineHeight),
+        content = {
+            tokens.forEach { token ->
+                Text(
+                    text = token,
+                    color = textColor,
+                    fontSize = bodyFontSize,
+                    lineHeight = bodyLineHeight,
+                    letterSpacing = 0.sp,
+                    maxLines = 1,
+                    softWrap = false,
+                    overflow = TextOverflow.Clip,
+                )
+            }
+        },
+    ) { measurables, constraints ->
+        val placeables = measurables.map { measurable ->
+            measurable.measure(constraints.copy(minWidth = 0, minHeight = 0))
+        }
+        val contentWidth = placeables.sumOf { it.width }
+        val height = constraints.maxHeight
+        val indent = indentPx.roundToInt()
+        val measuredSpacing = if (placeables.size > 1 && constraints.maxWidth > 0) {
+            (constraints.maxWidth - indent - contentWidth).toFloat() / (placeables.size - 1)
+        } else {
+            estimatedTokenSpacingPx
+        }
+        layout(width = constraints.maxWidth, height = height) {
+            var x = indent.toFloat()
+            placeables.forEach { placeable ->
+                val y = ((height - placeable.height) / 2).coerceAtLeast(0)
+                placeable.placeRelative(x.roundToInt(), y)
+                x += placeable.width + measuredSpacing
+            }
         }
     }
 }

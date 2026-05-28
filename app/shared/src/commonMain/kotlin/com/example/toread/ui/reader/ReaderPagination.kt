@@ -52,6 +52,7 @@ internal data class ReaderTextLineInfo(
     val lineHeightPx: Float = 0f,
     val firstLineIndentPx: Float = 0f,
     val fillRatio: Float = 0f,
+    val extraTokenSpacingPx: Float = 0f,
     val shouldJustify: Boolean = false,
     val isParagraphFirst: Boolean = false,
     val isParagraphLast: Boolean = false,
@@ -99,22 +100,25 @@ internal fun rememberReaderPaginationSpec(
     val density = LocalDensity.current
     return remember(title, isAndroid, isDesktop, maxWidthPx, maxHeightPx, density) {
         val fallbackTitle = title.ifBlank { "正文" }
-        val bodyFontSize = if (isAndroid) 28.sp else 22.sp
-        val bodyLineHeight = if (isAndroid) 46.sp else 34.sp
+        val bodyFontSize = if (isAndroid) 20.sp else 22.sp
+        val bodyLineHeight = if (isAndroid) 25.sp else 34.sp
         val bodyWidthPx: Int
         val bodyHeightPx: Int
         if (isDesktop) {
             val verticalChromePx = with(density) { (24.dp * 2 + 46.dp + 28.dp).toPx().roundToInt() }
+            val spreadHorizontalPaddingPx = with(density) { (60.dp * 2).toPx().roundToInt() }
+            val spreadVerticalPaddingPx = with(density) { (60.dp * 2).toPx().roundToInt() }
+            val spreadCenterGapPx = with(density) { (15.dp + 1.dp).toPx().roundToInt() }
             val pageOuterHeightPx = (maxHeightPx - verticalChromePx)
                 .coerceAtLeast(with(density) { 420.dp.toPx().roundToInt() })
             val spreadOuterWidthPx = (pageOuterHeightPx * DesktopSpreadAspectRatio).roundToInt()
-            bodyWidthPx = ((spreadOuterWidthPx - with(density) { (34.dp * 2 + 30.dp + 1.dp).toPx().roundToInt() }) / 2)
+            bodyWidthPx = ((spreadOuterWidthPx - spreadHorizontalPaddingPx - spreadCenterGapPx) / 2)
                 .coerceAtLeast(240)
-            bodyHeightPx = (pageOuterHeightPx - with(density) { 60.dp.toPx().roundToInt() })
+            bodyHeightPx = (pageOuterHeightPx - spreadVerticalPaddingPx)
                 .coerceAtLeast(260)
         } else {
             bodyWidthPx = (maxWidthPx - with(density) { 48.dp.toPx().roundToInt() }).coerceAtLeast(220)
-            bodyHeightPx = (maxHeightPx - with(density) { 48.dp.toPx().roundToInt() })
+            bodyHeightPx = (maxHeightPx - with(density) { 50.dp.toPx().roundToInt() })
                 .coerceAtLeast(260)
         }
         val fontPx = with(density) { bodyFontSize.toPx() }.coerceAtLeast(1f)
@@ -168,12 +172,20 @@ internal suspend fun ReaderDocument.paginateForReader(
     }
 
     suspend fun appendLine(line: ReaderTextLineInfo) {
-        val lineHeight = line.lineHeightPx.coerceAtLeast(spec.minimumLineHeightPx * 0.5f)
-        if (pageLines.isNotEmpty() && pageHeightPx + lineHeight > spec.bodyHeightPx) {
+        var pendingLine = line
+        while (true) {
+            val lineHeight = pendingLine.lineHeightPx.coerceAtLeast(spec.minimumLineHeightPx * 0.5f)
+            if (pageLines.isEmpty() || pageHeightPx + lineHeight <= spec.bodyHeightPx) {
+                pageLines += pendingLine
+                pageHeightPx += lineHeight
+                return
+            }
+
             flushPage()
+            if (pendingLine.lineHeightPx > spec.bodyHeightPx) {
+                pendingLine = pendingLine.copy(lineHeightPx = spec.bodyHeightPx.toFloat())
+            }
         }
-        pageLines += line
-        pageHeightPx += lineHeight
     }
 
     textDocument.chapters.forEachIndexed { chapterIndex, chapter ->
@@ -236,13 +248,9 @@ private fun ReaderParagraph.toTextLines(
         val wouldOverflow = width > 0f && width + glyph.metric.widthPx > lineLimit
         if (wouldOverflow) {
             var breakAt = index
-            if (isReaderLeadingPunctuation(glyph.char) && index > lineStart) {
-                breakAt = index + 1
-            } else {
-                val preferred = glyphs.findPreferredLineBreak(lineStart, index, lineLimit, spec)
-                if (preferred > lineStart) {
-                    breakAt = preferred
-                }
+            val preferred = glyphs.findPreferredLineBreak(lineStart, index, lineLimit, spec)
+            if (preferred > lineStart) {
+                breakAt = preferred
             }
             emitLine(breakAt.coerceAtMost(glyphs.size))
         } else {
@@ -259,15 +267,21 @@ private fun ReaderParagraph.toTextLines(
     return lines.mapIndexed { indexInParagraph, line ->
         val isFirst = indexInParagraph == 0
         val isLast = indexInParagraph == lastIndex
+        val shouldJustify = !isFirst &&
+            !isLast &&
+            line.fillRatio >= spec.justifyMinFillRatio &&
+            line.tokens.size >= MinimumJustifyTokenCount
         line.copy(
             isParagraphFirst = isFirst,
             isParagraphLast = isLast,
-            shouldJustify = !isFirst &&
-                !isLast &&
-                line.fillRatio >= spec.justifyMinFillRatio &&
-                line.tokens.size >= MinimumJustifyTokenCount,
+            shouldJustify = shouldJustify,
+            extraTokenSpacingPx = if (shouldJustify) {
+                line.calculateTokenSpacingPx()
+            } else {
+                0f
+            },
         )
-    }
+    }.fitLineWidths()
 }
 
 private fun ReaderParagraph.createTextLineInfo(
@@ -347,6 +361,46 @@ private fun ReaderChapter.trailingBlankLine(spec: ReaderPaginationSpec): ReaderT
         isBlank = true,
     )
 }
+
+private fun ReaderTextLineInfo.calculateTokenSpacingPx(): Float =
+    if (tokens.size <= 1) {
+        0f
+    } else {
+        (availableWidthPx - widthPx) / (tokens.size - 1)
+    }
+
+private fun ReaderTextLineInfo.adjustedWidthPx(): Float =
+    widthPx + if (shouldJustify && tokens.size > 1) {
+        extraTokenSpacingPx * (tokens.size - 1)
+    } else {
+        0f
+    }
+
+private fun ReaderTextLineInfo.isWidthOverflowing(): Boolean =
+    adjustedWidthPx() > availableWidthPx + 0.5f
+
+private fun List<ReaderTextLineInfo>.fitLineWidths(): List<ReaderTextLineInfo> {
+    var fitted = this
+    repeat(8) {
+        val overflowingLines = fitted.filter { it.isWidthOverflowing() }
+        if (overflowingLines.isEmpty()) return fitted
+        var changed = false
+        fitted = fitted.map { line ->
+            if (line.shouldJustify && !line.isWidthOverflowing()) {
+                val adjusted = line.copy(extraTokenSpacingPx = line.calculateTokenSpacingPx())
+                changed = changed || adjusted.extraTokenSpacingPx != line.extraTokenSpacingPx
+                adjusted
+            } else {
+                line
+            }
+        }
+        if (!changed) return fitted
+    }
+    return fitted
+}
+
+private fun List<ReaderTextLineInfo>.totalLineHeightPx(): Float =
+    fold(0f) { sum, line -> sum + line.lineHeightPx }
 
 private fun ReaderParagraph.toGlyphs(measurePool: ReaderCharacterMeasurePool): List<ReaderGlyph> {
     val glyphs = mutableListOf<ReaderGlyph>()
@@ -700,9 +754,6 @@ private fun Char.isFullWidthByUnicode(): Boolean {
 
 private fun Char.isReaderBreakPunctuation(): Boolean =
     this in "，。！？；、,.!?;:"
-
-private fun isReaderLeadingPunctuation(char: Char): Boolean =
-    char in "，。！？；：、,.!?;:)]}）】》〉」』"
 
 private fun String.isLikelyChapterTitle(): Boolean =
     length in 2..48 && ChapterTitleRegex.matches(this)
