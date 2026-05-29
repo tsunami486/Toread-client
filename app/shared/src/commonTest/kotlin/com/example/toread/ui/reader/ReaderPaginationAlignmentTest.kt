@@ -44,6 +44,31 @@ class ReaderPaginationAlignmentTest {
     }
 
     @Test
+    fun paragraphFirstLineJustifiesAfterTheIndent() = runBlocking {
+        val source = "天地玄黄宇宙洪荒日月盈昃辰宿列张寒来暑往秋收冬藏"
+        val document = ReaderDocument(title = "测试", format = "txt", text = source)
+        val spec = ReaderPaginationSpec(
+            fallbackTitle = "测试",
+            bodyWidthPx = 190,
+            bodyHeightPx = 180,
+            fontPx = 20f,
+            lineHeightPx = 32f,
+            linesPerPage = 5,
+            paragraphFirstLineIndentPx = 40f,
+        )
+
+        val firstLine = document.paginateForReader(spec)
+            .flatMap { it.lines }
+            .first { it.isParagraphFirst }
+
+        assertFalse(firstLine.isParagraphLast)
+        assertTrue(firstLine.shouldJustify)
+        assertEquals(150f, firstLine.availableWidthPx)
+        assertTrue(firstLine.extraTokenSpacingPx > 0f)
+        assertTrue(firstLine.adjustedWidthPxForTest() <= firstLine.availableWidthPx + 0.5f)
+    }
+
+    @Test
     fun paginationStoresChapterOrdAndParagraphLocators() = runBlocking {
         val source = listOf(
             "第一章 起点",
@@ -94,6 +119,48 @@ class ReaderPaginationAlignmentTest {
         assertTrue(punctuationLine.widthPx <= punctuationLine.availableWidthPx + 0.5f)
         assertFalse(punctuationLine.extraTokenSpacingPx < 0f)
         assertTrue(punctuationLine.adjustedWidthPxForTest() <= punctuationLine.availableWidthPx + 0.5f)
+    }
+
+    @Test
+    fun closingBacktickDoesNotStartLineWhenItOverflows() = runBlocking {
+        val source = "他说`甲乙丙丁`后续内容"
+        val document = ReaderDocument(title = "测试", format = "txt", text = source)
+        val spec = ReaderPaginationSpec(
+            fallbackTitle = "测试",
+            bodyWidthPx = 126,
+            bodyHeightPx = 180,
+            fontPx = 20f,
+            lineHeightPx = 32f,
+            linesPerPage = 5,
+            paragraphFirstLineIndentPx = 0f,
+        )
+
+        val lines = document.paginateForReader(spec).flatMap { it.lines }.filterNot { it.isBlank }
+
+        assertTrue(lines.size > 1)
+        assertTrue(lines.none { it.text.startsWith("`") })
+        assertTrue(lines.any { it.text.startsWith("丁`") })
+    }
+
+    @Test
+    fun sentenceEndingPunctuationAndClosingQuoteShareOnePunctuationWidth() = runBlocking {
+        val source = "前文前文前文。”后续内容"
+        val document = ReaderDocument(title = "测试", format = "txt", text = source)
+        val spec = ReaderPaginationSpec(
+            fallbackTitle = "测试",
+            bodyWidthPx = 140,
+            bodyHeightPx = 180,
+            fontPx = 20f,
+            lineHeightPx = 32f,
+            linesPerPage = 5,
+            paragraphFirstLineIndentPx = 0f,
+        )
+
+        val lines = document.paginateForReader(spec).flatMap { it.lines }.filterNot { it.isBlank }
+
+        assertEquals("前文前文前文。”", lines.first().text)
+        assertEquals(140f, lines.first().widthPx)
+        assertFalse(lines.any { it.text.startsWith("”") })
     }
 
     @Test

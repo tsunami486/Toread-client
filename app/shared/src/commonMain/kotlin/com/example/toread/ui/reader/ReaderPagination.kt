@@ -2,16 +2,36 @@ package com.example.toread.ui.reader
 
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.remember
+import androidx.compose.ui.platform.LocalFontFamilyResolver
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.text.Paragraph
+import androidx.compose.ui.text.ParagraphIntrinsics
+import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.Constraints
+import androidx.compose.ui.unit.Density
+import androidx.compose.ui.unit.TextUnit
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.toread.reader.ReaderDocument
 import kotlinx.coroutines.yield
+import kotlin.math.ceil
 import kotlin.math.max
 import kotlin.math.roundToInt
 
 private const val PreferredBreakSearchWindow = 14
 private const val MinimumJustifyTokenCount = 6
+private const val ReaderHanReferenceChar = '汉'
+private const val ParagraphMetricWidthTolerancePx = 0.5f
+
+private val ReaderMetricWarmupChars = (
+    "$ReaderHanReferenceChar" +
+        "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789" +
+        "，。！？；：、（）【】《》〈〉「」『』“”‘’—…·￥" +
+        "！＂＃＄％＆＇（）＊＋，－．／：；＜＝＞？＠［＼］＾＿｀｛｜｝～" +
+        ",.!?;:\"'`()[]{}<>-/\\|_~@#$%^&*+= "
+).toSet()
 
 private val ChapterTitleRegex = Regex(
     pattern = """^\s*((第\s*[0-9一二三四五六七八九十百千万零〇两]+\s*[章节回卷部篇集].*)|([卷部篇集]\s*[0-9一二三四五六七八九十百千万零〇两]+.*)|((chapter|section|part|volume)\s+[0-9a-zivxlcdm]+.*)|(序章|序言|前言|楔子|引子|尾声|后记|番外).*)\s*$""",
@@ -84,6 +104,10 @@ internal data class ReaderPaginationSpec(
     val fontPx: Float,
     val lineHeightPx: Float,
     val linesPerPage: Int,
+    val bodyFontSize: TextUnit = 20.sp,
+    val bodyLineHeight: TextUnit = 32.sp,
+    val density: Density? = null,
+    val fontFamilyResolver: FontFamily.Resolver? = null,
     val justifyMinFillRatio: Float = 0.88f,
     val paragraphFirstLineIndentPx: Float = fontPx * 2f,
     val minimumLineHeightPx: Float = lineHeightPx,
@@ -98,7 +122,8 @@ internal fun rememberReaderPaginationSpec(
     maxHeightPx: Int,
 ): ReaderPaginationSpec {
     val density = LocalDensity.current
-    return remember(title, isAndroid, isDesktop, maxWidthPx, maxHeightPx, density) {
+    val fontFamilyResolver = LocalFontFamilyResolver.current
+    return remember(title, isAndroid, isDesktop, maxWidthPx, maxHeightPx, density, fontFamilyResolver) {
         val fallbackTitle = title.ifBlank { "正文" }
         val bodyFontSize = if (isAndroid) 20.sp else 22.sp
         val bodyLineHeight = if (isAndroid) 25.sp else 34.sp
@@ -133,6 +158,10 @@ internal fun rememberReaderPaginationSpec(
             fontPx = fontPx,
             lineHeightPx = lineHeightPx,
             linesPerPage = linesPerPage,
+            bodyFontSize = bodyFontSize,
+            bodyLineHeight = bodyLineHeight,
+            density = density,
+            fontFamilyResolver = fontFamilyResolver,
         )
     }
 }
@@ -234,6 +263,7 @@ private fun ReaderParagraph.toTextLines(
                 spec = spec,
                 lineOrdinal = lineOrdinal,
                 availableWidthPx = currentLineLimit(),
+                measurePool = measurePool,
             )
             lineOrdinal++
         }
@@ -245,16 +275,19 @@ private fun ReaderParagraph.toTextLines(
     while (index < glyphs.size) {
         val glyph = glyphs[index]
         val lineLimit = currentLineLimit()
-        val wouldOverflow = width > 0f && width + glyph.metric.widthPx > lineLimit
+        val glyphWidth = glyphs.contextualWidthIncrement(index, lineStart, measurePool)
+        val candidateWidth = width + glyphWidth
+        val wouldOverflow = width > 0f && candidateWidth > lineLimit + ParagraphMetricWidthTolerancePx
         if (wouldOverflow) {
             var breakAt = index
-            val preferred = glyphs.findPreferredLineBreak(lineStart, index, lineLimit, spec)
+            val preferred = glyphs.findPreferredLineBreak(lineStart, index, lineLimit, spec, measurePool)
             if (preferred > lineStart) {
                 breakAt = preferred
             }
+            breakAt = glyphs.moveBreakBeforeLineStartProhibitedChar(lineStart, breakAt)
             emitLine(breakAt.coerceAtMost(glyphs.size))
         } else {
-            width += glyph.metric.widthPx
+            width = candidateWidth
             index++
         }
     }
@@ -267,8 +300,7 @@ private fun ReaderParagraph.toTextLines(
     return lines.mapIndexed { indexInParagraph, line ->
         val isFirst = indexInParagraph == 0
         val isLast = indexInParagraph == lastIndex
-        val shouldJustify = !isFirst &&
-            !isLast &&
+        val shouldJustify = !isLast &&
             line.fillRatio >= spec.justifyMinFillRatio &&
             line.tokens.size >= MinimumJustifyTokenCount
         line.copy(
@@ -289,10 +321,11 @@ private fun ReaderParagraph.createTextLineInfo(
     spec: ReaderPaginationSpec,
     lineOrdinal: Int,
     availableWidthPx: Float,
+    measurePool: ReaderCharacterMeasurePool,
 ): ReaderTextLineInfo {
     val startGlyph = glyphs.first()
     val endGlyph = glyphs.last()
-    val widthPx = glyphs.fold(0f) { sum, glyph -> sum + glyph.metric.widthPx }
+    val widthPx = glyphs.rangeWidth(0, glyphs.size, measurePool)
     val contentHeightPx = glyphs.fold(0f) { height, glyph -> max(height, glyph.metric.heightPx) }
         .coerceAtLeast(spec.fontPx)
     val lineHeightPx = max(spec.minimumLineHeightPx, contentHeightPx + (spec.lineHeightPx - spec.fontPx).coerceAtLeast(0f))
@@ -513,12 +546,20 @@ private fun List<ReaderGlyph>.findPreferredLineBreak(
     endExclusive: Int,
     lineLimitPx: Float,
     spec: ReaderPaginationSpec,
+    measurePool: ReaderCharacterMeasurePool,
 ): Int {
     val searchStart = (endExclusive - PreferredBreakSearchWindow).coerceAtLeast(start + 1)
     for (index in endExclusive downTo searchStart) {
         val char = this[index - 1].char
+        if (
+            char.isReaderSentenceEndingPunctuation() &&
+            index < size &&
+            this[index].char.isReaderClosingDoubleQuote()
+        ) {
+            continue
+        }
         if (char.isWhitespace() || char.isReaderBreakPunctuation()) {
-            val width = rangeWidth(start, index)
+            val width = rangeWidth(start, index, measurePool)
             if (width >= lineLimitPx * spec.justifyMinFillRatio) {
                 return index
             }
@@ -527,10 +568,52 @@ private fun List<ReaderGlyph>.findPreferredLineBreak(
     return -1
 }
 
-private fun List<ReaderGlyph>.rangeWidth(start: Int, endExclusive: Int): Float {
+private fun List<ReaderGlyph>.moveBreakBeforeLineStartProhibitedChar(
+    lineStart: Int,
+    breakAt: Int,
+): Int {
+    var adjusted = breakAt.coerceAtMost(size)
+    while (
+        adjusted > lineStart + 1 &&
+        adjusted < size &&
+        this[adjusted].char.isReaderLineStartProhibited()
+    ) {
+        adjusted--
+    }
+    return if (
+        adjusted > lineStart &&
+        adjusted < size &&
+        !this[adjusted].char.isReaderLineStartProhibited()
+    ) {
+        adjusted
+    } else {
+        breakAt
+    }
+}
+
+private fun List<ReaderGlyph>.contextualWidthIncrement(
+    index: Int,
+    lineStart: Int,
+    measurePool: ReaderCharacterMeasurePool,
+): Float {
+    val previous = getOrNull(index - 1)
+    val current = this[index]
+    val pairMetric = if (previous != null && index > lineStart) {
+        measurePool.measureSentenceEndingQuotePair(previous.char, current.char)
+    } else {
+        null
+    }
+    return pairMetric?.let { it.widthPx - previous!!.metric.widthPx } ?: current.metric.widthPx
+}
+
+private fun List<ReaderGlyph>.rangeWidth(
+    start: Int,
+    endExclusive: Int,
+    measurePool: ReaderCharacterMeasurePool,
+): Float {
     var width = 0f
     for (index in start until endExclusive) {
-        width += this[index].metric.widthPx
+        width += contextualWidthIncrement(index, start, measurePool)
     }
     return width
 }
@@ -651,9 +734,50 @@ private class ReaderCharacterMeasurePool(
     private val spec: ReaderPaginationSpec,
 ) {
     private val cache = mutableMapOf<Char, ReaderCharacterMetric>()
+    private val sentenceEndingPunctuationCache = mutableMapOf<Char, ReaderCharacterMetric>()
+    private val sentenceEndingQuotePairCache = mutableMapOf<String, ReaderCharacterPairMetric>()
+    private val hanMetric: ReaderCharacterMetric
+
+    init {
+        ReaderMetricWarmupChars.forEach { char ->
+            cache[char] = char.measureForReader(spec)
+        }
+        hanMetric = cache.getValue(ReaderHanReferenceChar)
+    }
 
     fun measure(char: Char): ReaderCharacterMetric =
-        cache.getOrPut(char) { char.measureForReader(spec) }
+        if (char.isReaderHanChar()) {
+            hanMetric.copy(char = char)
+        } else {
+            cache.getOrPut(char) { char.measureForReader(spec) }
+        }
+
+    fun measureSentenceEndingQuotePair(
+        punctuation: Char,
+        quote: Char,
+    ): ReaderCharacterPairMetric? {
+        if (!punctuation.isReaderSentenceEndingPunctuation() || !quote.isReaderClosingDoubleQuote()) {
+            return null
+        }
+        val key = "$punctuation$quote"
+        return sentenceEndingQuotePairCache.getOrPut(key) {
+            val punctuationMetric = measure(punctuation)
+            val trimmedPunctuationMetric = sentenceEndingPunctuationCache.getOrPut(punctuation) {
+                punctuation.measureSentenceEndingPunctuationForReader(spec, punctuationMetric)
+            }
+            val quoteMetric = measure(quote)
+            val pairWidth = punctuationMetric.widthPx
+            ReaderCharacterPairMetric(
+                first = punctuation,
+                second = quote,
+                widthPx = pairWidth,
+                firstWidthPx = trimmedPunctuationMetric.widthPx,
+                secondWidthPx = quoteMetric.widthPx,
+                secondOverlapPx = (trimmedPunctuationMetric.widthPx + quoteMetric.widthPx - pairWidth)
+                    .coerceAtLeast(0f),
+            )
+        }
+    }
 }
 
 internal data class ReaderCharacterMetric(
@@ -661,6 +785,15 @@ internal data class ReaderCharacterMetric(
     val widthPx: Float,
     val heightPx: Float,
     val elementKind: ReaderTextElementKind,
+)
+
+private data class ReaderCharacterPairMetric(
+    val first: Char,
+    val second: Char,
+    val widthPx: Float,
+    val firstWidthPx: Float,
+    val secondWidthPx: Float,
+    val secondOverlapPx: Float,
 )
 
 internal enum class ReaderTextElementKind {
@@ -681,6 +814,92 @@ private data class ReaderGlyph(
 )
 
 private fun Char.measureForReader(spec: ReaderPaginationSpec): ReaderCharacterMetric {
+    val paragraphMetric = measureForReaderWithParagraph(spec)
+    if (paragraphMetric != null) return paragraphMetric
+
+    return measureForReaderByFormula(spec)
+}
+
+private fun Char.measureForReaderWithParagraph(spec: ReaderPaginationSpec): ReaderCharacterMetric? {
+    val kind = toElementKind()
+    if (kind == ReaderTextElementKind.ZeroWidth) return null
+
+    val density = spec.density ?: return null
+    val fontFamilyResolver = spec.fontFamilyResolver ?: return null
+    return runCatching {
+        val text = toString()
+        val style = TextStyle(
+            fontSize = spec.bodyFontSize,
+            lineHeight = spec.bodyLineHeight,
+            letterSpacing = 0.sp,
+        )
+        val intrinsics = ParagraphIntrinsics(
+            text = text,
+            style = style,
+            annotations = emptyList(),
+            density = density,
+            fontFamilyResolver = fontFamilyResolver,
+        )
+        val paragraph = Paragraph(
+            paragraphIntrinsics = intrinsics,
+            constraints = Constraints(maxWidth = ceil(intrinsics.maxIntrinsicWidth).toInt().coerceAtLeast(1)),
+            maxLines = 1,
+            overflow = TextOverflow.Clip,
+        )
+        val bounds = paragraph.getBoundingBox(0)
+        val fallback = measureForReaderByFormula(spec)
+        val width = max(paragraph.getLineWidth(0), bounds.right - bounds.left)
+            .takeIf { it > 0f }
+            ?: fallback.widthPx
+        val height = (bounds.bottom - bounds.top)
+            .takeIf { it > 0f }
+            ?: fallback.heightPx
+        ReaderCharacterMetric(
+            char = this,
+            widthPx = width,
+            heightPx = height,
+            elementKind = kind,
+        )
+    }.getOrNull()
+}
+
+private fun Char.measureSentenceEndingPunctuationForReader(
+    spec: ReaderPaginationSpec,
+    fallback: ReaderCharacterMetric,
+): ReaderCharacterMetric {
+    val density = spec.density ?: return fallback
+    val fontFamilyResolver = spec.fontFamilyResolver ?: return fallback
+    return runCatching {
+        val style = TextStyle(
+            fontSize = spec.bodyFontSize,
+            lineHeight = spec.bodyLineHeight,
+            letterSpacing = 0.sp,
+        )
+        val intrinsics = ParagraphIntrinsics(
+            text = toString(),
+            style = style,
+            annotations = emptyList(),
+            density = density,
+            fontFamilyResolver = fontFamilyResolver,
+        )
+        val paragraph = Paragraph(
+            paragraphIntrinsics = intrinsics,
+            constraints = Constraints(maxWidth = ceil(intrinsics.maxIntrinsicWidth).toInt().coerceAtLeast(1)),
+            maxLines = 1,
+            overflow = TextOverflow.Clip,
+        )
+        val bounds = paragraph.getBoundingBox(0)
+        val trimmedWidth = (bounds.right - bounds.left)
+            .takeIf { it > 0f }
+            ?.coerceIn(fallback.widthPx * 0.35f, fallback.widthPx)
+            ?: fallback.widthPx
+        fallback.copy(widthPx = trimmedWidth)
+    }.getOrElse {
+        fallback
+    }
+}
+
+private fun Char.measureForReaderByFormula(spec: ReaderPaginationSpec): ReaderCharacterMetric {
     val kind = toElementKind()
     val width = when (kind) {
         ReaderTextElementKind.ZeroWidth -> 0f
@@ -752,8 +971,24 @@ private fun Char.isFullWidthByUnicode(): Boolean {
         code in 0x1F300..0x1FAFF
 }
 
+private fun Char.isReaderHanChar(): Boolean {
+    val code = code
+    return code in 0x3400..0x4DBF ||
+        code in 0x4E00..0x9FFF ||
+        code in 0xF900..0xFAFF
+}
+
 private fun Char.isReaderBreakPunctuation(): Boolean =
     this in "，。！？；、,.!?;:"
+
+private fun Char.isReaderSentenceEndingPunctuation(): Boolean =
+    this in "。！？.!?…"
+
+private fun Char.isReaderClosingDoubleQuote(): Boolean =
+    this == '”'
+
+private fun Char.isReaderLineStartProhibited(): Boolean =
+    this in "，。！？；：、,.!?;:)]}）】》〉」』’”`"
 
 private fun String.isLikelyChapterTitle(): Boolean =
     length in 2..48 && ChapterTitleRegex.matches(this)
