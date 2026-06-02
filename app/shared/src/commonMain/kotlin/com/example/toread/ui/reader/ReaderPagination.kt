@@ -34,9 +34,12 @@ private val ReaderMetricWarmupChars = (
 ).toSet()
 
 private val ChapterTitleRegex = Regex(
-    pattern = """^\s*((第\s*[0-9一二三四五六七八九十百千万零〇两]+\s*[章节回卷部篇集].*)|([卷部篇集]\s*[0-9一二三四五六七八九十百千万零〇两]+.*)|((chapter|section|part|volume)\s+[0-9a-zivxlcdm]+.*)|(序章|序言|前言|楔子|引子|尾声|后记|番外).*)\s*$""",
+    pattern = """^\s*((第\s*[0-9一二三四五六七八九十百千万零〇两]+\s*[章节回卷部篇集幕].*)|([卷部篇集]\s*[0-9一二三四五六七八九十百千万零〇两]+.*)|((chapter|section|part|volume)\s+[0-9a-zivxlcdm]+.*)|(序章|序言|前言|楔子|引子|尾声|后记|番外).*)\s*$""",
     option = RegexOption.IGNORE_CASE,
 )
+private const val ChineseChapterNumberChars = "一二三四五六七八九十百千万零〇两"
+private const val ChineseChapterUnitChars = "章节回卷部篇集幕"
+private val ChineseStandaloneChapterPrefixes = listOf("序章", "序言", "前言", "楔子", "引子", "尾声", "后记", "番外")
 
 internal data class ReaderPageSlice(
     val chapterTitle: String,
@@ -47,6 +50,29 @@ internal data class ReaderPageSlice(
     val endLocator: ReaderTextLocator = ReaderTextLocator(chapterOrd = chapterOrd, absoluteOffset = endOffset),
     val lines: List<ReaderTextLineInfo> = emptyList(),
 )
+
+internal data class ReaderChapterEntry(
+    val chapterOrd: Int,
+    val title: String,
+    val pageIndex: Int,
+)
+
+internal fun List<ReaderPageSlice>.readerChapterEntries(): List<ReaderChapterEntry> {
+    val seenChapterOrd = mutableSetOf<Int>()
+    return mapIndexedNotNull { pageIndex, page ->
+        val titleLine = page.lines.firstOrNull { it.isChapterTitle }
+        val chapterOrd = titleLine?.chapterOrd ?: page.chapterOrd
+        if (!seenChapterOrd.add(chapterOrd)) return@mapIndexedNotNull null
+        val title = titleLine?.text
+            ?: page.chapterTitle.takeIf { it.isNotBlank() }
+            ?: "正文"
+        ReaderChapterEntry(
+            chapterOrd = chapterOrd,
+            title = title,
+            pageIndex = pageIndex,
+        )
+    }
+}
 
 internal data class ReaderTextLocator(
     val chapterOrd: Int = 0,
@@ -77,6 +103,7 @@ internal data class ReaderTextLineInfo(
     val isParagraphFirst: Boolean = false,
     val isParagraphLast: Boolean = false,
     val isBlank: Boolean = false,
+    val isChapterTitle: Boolean = false,
 )
 
 internal typealias ReaderPageLine = ReaderTextLineInfo
@@ -108,6 +135,8 @@ internal data class ReaderPaginationSpec(
     val bodyLineHeight: TextUnit = 32.sp,
     val density: Density? = null,
     val fontFamilyResolver: FontFamily.Resolver? = null,
+    val chapterTitleFontPx: Float = fontPx * 1.35f,
+    val chapterTitleLineHeightPx: Float = lineHeightPx * 1.35f,
     val justifyMinFillRatio: Float = 0.88f,
     val paragraphFirstLineIndentPx: Float = fontPx * 2f,
     val minimumLineHeightPx: Float = lineHeightPx,
@@ -120,13 +149,27 @@ internal fun rememberReaderPaginationSpec(
     isDesktop: Boolean,
     maxWidthPx: Int,
     maxHeightPx: Int,
+    topReservedPx: Int = 0,
+    bottomReservedPx: Int = 0,
 ): ReaderPaginationSpec {
     val density = LocalDensity.current
     val fontFamilyResolver = LocalFontFamilyResolver.current
-    return remember(title, isAndroid, isDesktop, maxWidthPx, maxHeightPx, density, fontFamilyResolver) {
+    return remember(
+        title,
+        isAndroid,
+        isDesktop,
+        maxWidthPx,
+        maxHeightPx,
+        topReservedPx,
+        bottomReservedPx,
+        density,
+        fontFamilyResolver,
+    ) {
         val fallbackTitle = title.ifBlank { "正文" }
         val bodyFontSize = if (isAndroid) 20.sp else 22.sp
         val bodyLineHeight = if (isAndroid) 25.sp else 34.sp
+        val chapterTitleFontSize = if (isAndroid) 27.sp else 30.sp
+        val chapterTitleLineHeight = if (isAndroid) 36.sp else 44.sp
         val bodyWidthPx: Int
         val bodyHeightPx: Int
         if (isDesktop) {
@@ -143,11 +186,19 @@ internal fun rememberReaderPaginationSpec(
                 .coerceAtLeast(260)
         } else {
             bodyWidthPx = (maxWidthPx - with(density) { 48.dp.toPx().roundToInt() }).coerceAtLeast(220)
-            bodyHeightPx = (maxHeightPx - with(density) { 50.dp.toPx().roundToInt() })
+            bodyHeightPx = (
+                maxHeightPx -
+                    with(density) { 50.dp.toPx().roundToInt() } -
+                    topReservedPx -
+                    bottomReservedPx
+                )
                 .coerceAtLeast(260)
         }
         val fontPx = with(density) { bodyFontSize.toPx() }.coerceAtLeast(1f)
         val lineHeightPx = with(density) { bodyLineHeight.toPx() }.coerceAtLeast(fontPx)
+        val chapterTitleFontPx = with(density) { chapterTitleFontSize.toPx() }.coerceAtLeast(fontPx)
+        val chapterTitleLineHeightPx = with(density) { chapterTitleLineHeight.toPx() }
+            .coerceAtLeast(chapterTitleFontPx)
         val lineSafetyMargin = if (isDesktop) 2 else 0
         val linesPerPage = ((bodyHeightPx / lineHeightPx).toInt() - lineSafetyMargin).coerceAtLeast(1)
 
@@ -162,6 +213,8 @@ internal fun rememberReaderPaginationSpec(
             bodyLineHeight = bodyLineHeight,
             density = density,
             fontFamilyResolver = fontFamilyResolver,
+            chapterTitleFontPx = chapterTitleFontPx,
+            chapterTitleLineHeightPx = chapterTitleLineHeightPx,
         )
     }
 }
@@ -179,7 +232,20 @@ internal suspend fun ReaderDocument.paginateForReader(
     val pageLines = mutableListOf<ReaderTextLineInfo>()
     var pageHeightPx = 0f
 
+    fun lineHeightForPaging(line: ReaderTextLineInfo): Float =
+        line.lineHeightPx.coerceAtLeast(spec.minimumLineHeightPx * 0.5f)
+
+    fun trimTrailingBlankLines() {
+        while (pageLines.lastOrNull()?.isBlank == true) {
+            pageHeightPx -= lineHeightForPaging(pageLines.removeAt(pageLines.lastIndex))
+        }
+        if (pageHeightPx < 0f) {
+            pageHeightPx = 0f
+        }
+    }
+
     suspend fun flushPage(force: Boolean = false) {
+        trimTrailingBlankLines()
         if (pageLines.isEmpty() && !force) return
         val firstLine = pageLines.firstOrNull()
         val lastLine = pageLines.lastOrNull()
@@ -203,7 +269,21 @@ internal suspend fun ReaderDocument.paginateForReader(
     suspend fun appendLine(line: ReaderTextLineInfo) {
         var pendingLine = line
         while (true) {
-            val lineHeight = pendingLine.lineHeightPx.coerceAtLeast(spec.minimumLineHeightPx * 0.5f)
+            val lineHeight = lineHeightForPaging(pendingLine)
+            if (pendingLine.isBlank) {
+                if (pageLines.isNotEmpty() && pageHeightPx + lineHeight <= spec.bodyHeightPx) {
+                    pageLines += pendingLine
+                    pageHeightPx += lineHeight
+                }
+                return
+            }
+            if (pageLines.isEmpty() || pageHeightPx + lineHeight <= spec.bodyHeightPx) {
+                pageLines += pendingLine
+                pageHeightPx += lineHeight
+                return
+            }
+
+            trimTrailingBlankLines()
             if (pageLines.isEmpty() || pageHeightPx + lineHeight <= spec.bodyHeightPx) {
                 pageLines += pendingLine
                 pageHeightPx += lineHeight
@@ -218,13 +298,16 @@ internal suspend fun ReaderDocument.paginateForReader(
     }
 
     textDocument.chapters.forEachIndexed { chapterIndex, chapter ->
+        if (chapterIndex > 0 && pageLines.isNotEmpty()) {
+            flushPage()
+        }
+        chapter.titleLine(spec, measurePool)?.let { titleLine ->
+            appendLine(titleLine)
+        }
         chapter.paragraphs.forEach { paragraph ->
             paragraph.toTextLines(spec, measurePool).forEach { line ->
                 appendLine(line)
             }
-        }
-        if (chapterIndex < textDocument.chapters.lastIndex && pageLines.isNotEmpty()) {
-            appendLine(chapter.trailingBlankLine(spec))
         }
     }
 
@@ -350,6 +433,44 @@ private fun ReaderParagraph.createTextLineInfo(
     )
 }
 
+private fun ReaderChapter.titleLine(
+    spec: ReaderPaginationSpec,
+    measurePool: ReaderCharacterMeasurePool,
+): ReaderTextLineInfo? {
+    if (titleStartOffset >= titleEndOffset || title.isBlank()) return null
+    val glyphs = title.toChapterTitleGlyphs(
+        chapterOrd = ord,
+        absoluteStart = titleStartOffset,
+        measurePool = measurePool,
+    )
+    val widthPx = glyphs.rangeWidth(0, glyphs.size, measurePool)
+    val locator = ReaderTextLocator(
+        chapterOrd = ord,
+        paragraphIndex = 0,
+        absoluteOffset = titleStartOffset,
+    )
+    return ReaderTextLineInfo(
+        startOffset = titleStartOffset,
+        endOffset = titleEndOffset,
+        text = title,
+        tokens = glyphs.toDrawTokens(),
+        chapterOrd = ord,
+        chapterTitle = title,
+        paragraphIndex = 0,
+        startLocator = locator,
+        endLocator = locator.copy(absoluteOffset = titleEndOffset),
+        widthPx = widthPx,
+        availableWidthPx = spec.bodyWidthPx.toFloat(),
+        contentHeightPx = spec.chapterTitleFontPx,
+        lineHeightPx = spec.chapterTitleLineHeightPx,
+        fillRatio = (widthPx / spec.bodyWidthPx).coerceIn(0f, 1.25f),
+        shouldJustify = false,
+        isParagraphFirst = true,
+        isParagraphLast = true,
+        isChapterTitle = true,
+    )
+}
+
 private fun ReaderParagraph.blankLine(spec: ReaderPaginationSpec): ReaderTextLineInfo {
     val locator = ReaderTextLocator(
         chapterOrd = chapterOrd,
@@ -436,15 +557,41 @@ private fun List<ReaderTextLineInfo>.totalLineHeightPx(): Float =
     fold(0f) { sum, line -> sum + line.lineHeightPx }
 
 private fun ReaderParagraph.toGlyphs(measurePool: ReaderCharacterMeasurePool): List<ReaderGlyph> {
+    return text.toChapterTextGlyphs(
+        chapterOrd = chapterOrd,
+        paragraphIndex = paragraphIndex,
+        absoluteStart = absoluteStart,
+        measurePool = measurePool,
+    )
+}
+
+private fun String.toChapterTitleGlyphs(
+    chapterOrd: Int,
+    absoluteStart: Int,
+    measurePool: ReaderCharacterMeasurePool,
+): List<ReaderGlyph> =
+    toChapterTextGlyphs(
+        chapterOrd = chapterOrd,
+        paragraphIndex = 0,
+        absoluteStart = absoluteStart,
+        measurePool = measurePool,
+    )
+
+private fun String.toChapterTextGlyphs(
+    chapterOrd: Int,
+    paragraphIndex: Int,
+    absoluteStart: Int,
+    measurePool: ReaderCharacterMeasurePool,
+): List<ReaderGlyph> {
     val glyphs = mutableListOf<ReaderGlyph>()
     var index = 0
     var elementIndex = 0
-    while (index < text.length) {
-        val char = text[index]
+    while (index < length) {
+        val char = this[index]
         if (char.isLatinWordChar()) {
             val elementStart = index
-            while (index < text.length && text[index].isLatinWordChar()) {
-                val current = text[index]
+            while (index < length && this[index].isLatinWordChar()) {
+                val current = this[index]
                 glyphs += ReaderGlyph(
                     char = current,
                     absoluteStart = absoluteStart + index,
@@ -990,5 +1137,33 @@ private fun Char.isReaderClosingDoubleQuote(): Boolean =
 private fun Char.isReaderLineStartProhibited(): Boolean =
     this in "，。！？；：、,.!?;:)]}）】》〉」』’”`"
 
-private fun String.isLikelyChapterTitle(): Boolean =
-    length in 2..48 && ChapterTitleRegex.matches(this)
+private fun String.isLikelyChapterTitle(): Boolean {
+    val trimmed = trim()
+    if (trimmed.length !in 2..48) return false
+    return trimmed.isLikelyChineseChapterTitle() || ChapterTitleRegex.matches(trimmed)
+}
+
+private fun String.isLikelyChineseChapterTitle(): Boolean {
+    if (ChineseStandaloneChapterPrefixes.any { startsWith(it) }) return true
+    if (startsWith("第")) {
+        var index = 1
+        while (index < length && this[index].isWhitespace()) index++
+        val numberStart = index
+        while (index < length && this[index].isChapterNumberChar()) index++
+        if (index == numberStart) return false
+        while (index < length && this[index].isWhitespace()) index++
+        return index < length && this[index] in ChineseChapterUnitChars
+    }
+    val firstChar = firstOrNull()
+    if (firstChar != null && firstChar in ChineseChapterUnitChars) {
+        var index = 1
+        while (index < length && this[index].isWhitespace()) index++
+        val numberStart = index
+        while (index < length && this[index].isChapterNumberChar()) index++
+        return index > numberStart
+    }
+    return false
+}
+
+private fun Char.isChapterNumberChar(): Boolean =
+    isDigit() || this in ChineseChapterNumberChars

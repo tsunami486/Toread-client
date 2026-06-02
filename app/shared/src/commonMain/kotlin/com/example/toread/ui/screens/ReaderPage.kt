@@ -1,10 +1,17 @@
 package com.example.toread.ui.screens
 
+import androidx.compose.animation.core.LinearEasing
+import androidx.compose.animation.core.RepeatMode
+import androidx.compose.animation.core.animateFloat
+import androidx.compose.animation.core.infiniteRepeatable
+import androidx.compose.animation.core.rememberInfiniteTransition
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.focusable
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Text
@@ -17,7 +24,9 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.rotate
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.Color
@@ -35,6 +44,7 @@ import com.example.toread.library.BookshelfBook
 import com.example.toread.library.BookshelfRepository
 import com.example.toread.platform.PlatformBackHandler
 import com.example.toread.platform.SystemBarsController
+import com.example.toread.platform.rememberSystemBarInsets
 import com.example.toread.progress.ReadingProgressRepository
 import com.example.toread.reader.BookLocator
 import com.example.toread.reader.ReaderContentLoader
@@ -64,6 +74,17 @@ internal fun ReaderPage(
     val isAndroid = platform.kind == PlatformKind.Android
     val isDesktop = platform.kind == PlatformKind.Desktop
     val density = LocalDensity.current
+    val systemBarInsets = rememberSystemBarInsets()
+    val topSystemBarReservePx = if (isAndroid) {
+        with(density) { systemBarInsets.top.toPx().roundToInt() }
+    } else {
+        0
+    }
+    val bottomGestureReservePx = if (isAndroid) {
+        with(density) { systemBarInsets.bottom.toPx().roundToInt() }
+    } else {
+        0
+    }
     var document by remember(book?.bookHash) { mutableStateOf<ReaderDocument?>(null) }
     var restoredLocator by remember(book?.bookHash) { mutableStateOf<BookLocator?>(null) }
     var restoredForMeasuredPages by remember(book?.bookHash) { mutableStateOf(false) }
@@ -71,7 +92,6 @@ internal fun ReaderPage(
     var error by remember(book?.bookHash) { mutableStateOf<String?>(null) }
     var controlsVisible by remember(book?.bookHash) { mutableStateOf(false) }
     var measuredPages by remember(book?.bookHash) { mutableStateOf<List<ReaderPageSlice>>(emptyList()) }
-    var paginationMessage by remember(book?.bookHash) { mutableStateOf<String?>(null) }
     var paginationComplete by remember(book?.bookHash) { mutableStateOf(false) }
     var desktopReaderFocusReady by remember(book?.bookHash) { mutableStateOf(false) }
     val focusRequester = remember { FocusRequester() }
@@ -152,7 +172,7 @@ internal fun ReaderPage(
     ) {
         when {
             error != null -> ReaderMessage(message = error.orEmpty(), onBack = ::exitReaderWithoutProgress)
-            loadedDocument == null -> ReaderMessage(message = "正在读取本地文件...", onBack = ::exitReaderWithoutProgress)
+            loadedDocument == null -> ReaderLoadingIndicator()
             !loadedDocument.isReadable -> ReaderMessage(
                 message = loadedDocument.message ?: "当前格式暂不能直接阅读。",
                 onBack = ::exitReaderWithoutProgress,
@@ -164,10 +184,11 @@ internal fun ReaderPage(
                     isDesktop = isDesktop,
                     maxWidthPx = with(density) { maxWidth.toPx().roundToInt() },
                     maxHeightPx = with(density) { maxHeight.toPx().roundToInt() },
+                    topReservedPx = topSystemBarReservePx,
+                    bottomReservedPx = bottomGestureReservePx,
                 )
 
                 LaunchedEffect(loadedDocument.text, spec) {
-                    paginationMessage = "正在分页本地文本..."
                     measuredPages = emptyList()
                     paginationComplete = false
                     restoredForMeasuredPages = false
@@ -177,11 +198,9 @@ internal fun ReaderPage(
                         if (partialPages.size <= 4 || partialPages.size - lastPublishedPageCount >= 24) {
                             measuredPages = partialPages
                             lastPublishedPageCount = partialPages.size
-                            paginationMessage = "正在分页：${partialPages.size} 页"
                         }
                     }
                     paginationComplete = true
-                    paginationMessage = null
                 }
 
                 val pages = measuredPages
@@ -262,9 +281,8 @@ internal fun ReaderPage(
                 }
 
                 Box(modifier = contentModifier) {
-                    val message = paginationMessage
                     if (pages.isEmpty()) {
-                        ReaderMessage(message = message ?: "正在分页本地文本...", onBack = ::exitReaderWithoutProgress)
+                        ReaderLoadingIndicator()
                     } else if (isDesktop) {
                         DesktopReaderLayout(
                             book = book,
@@ -287,6 +305,7 @@ internal fun ReaderPage(
                             onBack = ::exitReader,
                             onPrevious = { goToPage(pageIndex - 1) },
                             onNext = { goToPage(pageIndex + 1) },
+                            onGoToPage = { targetPage -> goToPage(targetPage) },
                             onToggleControls = {
                                 controlsVisible = !controlsVisible
                                 if (controlsVisible) {
@@ -300,5 +319,29 @@ internal fun ReaderPage(
                 }
             }
         }
+    }
+}
+
+@Composable
+private fun ReaderLoadingIndicator() {
+    val infiniteTransition = rememberInfiniteTransition(label = "reader-loading")
+    val rotation by infiniteTransition.animateFloat(
+        initialValue = 0f,
+        targetValue = 360f,
+        animationSpec = infiniteRepeatable(
+            animation = tween(durationMillis = 90, easing = LinearEasing),
+            repeatMode = RepeatMode.Restart,
+        ),
+        label = "reader-loading-rotation",
+    )
+
+    Box(
+        modifier = Modifier.fillMaxSize(),
+        contentAlignment = Alignment.Center,
+    ) {
+        CircularProgressIndicator(
+            progress = { 0.68f },
+            modifier = Modifier.rotate(rotation),
+        )
     }
 }

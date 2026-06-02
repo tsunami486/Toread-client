@@ -94,10 +94,73 @@ class ReaderPaginationAlignmentTest {
         assertTrue(lines.all { it.startLocator.chapterOrd == it.chapterOrd })
         assertTrue(lines.all { it.startLocator.absoluteOffset == it.startOffset })
 
-        val firstChapterLine = lines.first { it.chapterOrd == 0 }
-        assertEquals(0, firstChapterLine.startLocator.paragraphIndex)
-        assertTrue(firstChapterLine.isParagraphFirst)
-        assertTrue(firstChapterLine.firstLineIndentPx > 0f)
+        val firstChapterTitleLine = lines.first { it.chapterOrd == 0 && it.isChapterTitle }
+        assertEquals("第一章 起点", firstChapterTitleLine.text)
+        assertEquals(0f, firstChapterTitleLine.firstLineIndentPx)
+        assertTrue(firstChapterTitleLine.lineHeightPx == spec.chapterTitleLineHeightPx)
+
+        val firstChapterBodyLine = lines.first { it.chapterOrd == 0 && !it.isChapterTitle }
+        assertEquals(0, firstChapterBodyLine.startLocator.paragraphIndex)
+        assertTrue(firstChapterBodyLine.isParagraphFirst)
+        assertTrue(firstChapterBodyLine.firstLineIndentPx > 0f)
+    }
+
+    @Test
+    fun eachChapterStartsOnNewPageWithLargeTitleLine() = runBlocking {
+        val source = listOf(
+            "第一章 起点",
+            "起点正文起点正文起点正文起点正文。",
+            "第二章 继续",
+            "继续正文继续正文继续正文继续正文。",
+        ).joinToString("\n")
+        val document = ReaderDocument(title = "测试", format = "txt", text = source)
+        val spec = ReaderPaginationSpec(
+            fallbackTitle = "测试",
+            bodyWidthPx = 180,
+            bodyHeightPx = 220,
+            fontPx = 20f,
+            lineHeightPx = 32f,
+            linesPerPage = 6,
+        )
+
+        val pages = document.paginateForReader(spec)
+        val chapterStartPages = pages.filter { it.lines.firstOrNull()?.isChapterTitle == true }
+
+        assertEquals(2, chapterStartPages.size)
+        assertEquals("第一章 起点", chapterStartPages[0].lines.first().text)
+        assertEquals("第二章 继续", chapterStartPages[1].lines.first().text)
+        assertTrue(chapterStartPages.all { it.lines.first().lineHeightPx == spec.chapterTitleLineHeightPx })
+        assertTrue(chapterStartPages.all { it.lines.first().contentHeightPx == spec.chapterTitleFontPx })
+        assertTrue(pages.none { page -> page.lines.map { it.chapterOrd }.distinct().size > 1 })
+    }
+
+    @Test
+    fun chapterEntriesUseFirstRecognizedChapterPages() = runBlocking {
+        val source = listOf(
+            "第一章 起点",
+            "起点正文起点正文起点正文起点正文。",
+            "第二章 继续",
+            "继续正文继续正文继续正文继续正文。",
+            "第三章 归途",
+            "归途正文归途正文归途正文归途正文。",
+        ).joinToString("\n")
+        val document = ReaderDocument(title = "测试", format = "txt", text = source)
+        val spec = ReaderPaginationSpec(
+            fallbackTitle = "测试",
+            bodyWidthPx = 180,
+            bodyHeightPx = 160,
+            fontPx = 20f,
+            lineHeightPx = 32f,
+            linesPerPage = 4,
+        )
+
+        val pages = document.paginateForReader(spec)
+        val chapters = pages.readerChapterEntries()
+
+        assertEquals(listOf("第一章 起点", "第二章 继续", "第三章 归途"), chapters.map { it.title })
+        assertEquals(listOf(0, 1, 2), chapters.map { it.chapterOrd })
+        assertTrue(chapters.zipWithNext().all { (previous, next) -> previous.pageIndex < next.pageIndex })
+        assertTrue(chapters.all { chapter -> pages[chapter.pageIndex].lines.first().isChapterTitle })
     }
 
     @Test
@@ -187,6 +250,48 @@ class ReaderPaginationAlignmentTest {
         assertTrue(pages.all { page ->
             page.lines.fold(0f) { sum, line -> sum + line.lineHeightPx } <= spec.bodyHeightPx + 0.5f
         })
+    }
+
+    @Test
+    fun blankParagraphDoesNotBecomePageTopLine() = runBlocking {
+        val source = "甲\n\n乙"
+        val document = ReaderDocument(title = "测试", format = "txt", text = source)
+        val spec = ReaderPaginationSpec(
+            fallbackTitle = "测试",
+            bodyWidthPx = 200,
+            bodyHeightPx = 32,
+            fontPx = 20f,
+            lineHeightPx = 32f,
+            linesPerPage = 1,
+            paragraphFirstLineIndentPx = 0f,
+        )
+
+        val pages = document.paginateForReader(spec)
+
+        assertTrue(pages.size > 1)
+        assertTrue(pages.all { page -> page.lines.firstOrNull()?.isBlank != true })
+        assertEquals(listOf("甲", "乙"), pages.flatMap { page -> page.lines.map { it.text } })
+    }
+
+    @Test
+    fun blankParagraphDoesNotRemainAsPageBottomLine() = runBlocking {
+        val source = "甲\n\n乙"
+        val document = ReaderDocument(title = "测试", format = "txt", text = source)
+        val spec = ReaderPaginationSpec(
+            fallbackTitle = "测试",
+            bodyWidthPx = 200,
+            bodyHeightPx = 55,
+            fontPx = 20f,
+            lineHeightPx = 32f,
+            linesPerPage = 2,
+            paragraphFirstLineIndentPx = 0f,
+        )
+
+        val pages = document.paginateForReader(spec)
+
+        assertTrue(pages.size > 1)
+        assertTrue(pages.all { page -> page.lines.lastOrNull()?.isBlank != true })
+        assertEquals(listOf("甲", "乙"), pages.flatMap { page -> page.lines.map { it.text } })
     }
 }
 

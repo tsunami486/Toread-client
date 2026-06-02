@@ -22,17 +22,20 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.example.toread.importing.BookImportResult
 import com.example.toread.importing.BookImportService
+import com.example.toread.platform.PlatformBackHandler
 import com.example.toread.ui.components.ScreenColumn
 import kotlinx.coroutines.launch
 
 @Composable
-internal fun ImportPage(importService: BookImportService?, onImported: () -> Unit, onDone: () -> Unit) {
+internal fun ImportPage(importService: BookImportService?, onImported: () -> Unit, onBack: () -> Unit) {
     val scope = rememberCoroutineScope()
     var status by remember { mutableStateOf("等待选择本地文件。") }
 
+    PlatformBackHandler(enabled = true, onBack = onBack)
+
     ScreenColumn {
         Text("导入书籍", style = MaterialTheme.typography.headlineMedium, fontWeight = FontWeight.SemiBold)
-        Text("支持 EPUB、PDF、TXT。只读取你主动选择的本地文件。")
+        Text("支持 EPUB、PDF、TXT。")
         Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
             Button(
                 enabled = importService != null,
@@ -53,7 +56,7 @@ internal fun ImportPage(importService: BookImportService?, onImported: () -> Uni
             ) {
                 Text("选择本地文件")
             }
-            OutlinedButton(onClick = onDone) {
+            OutlinedButton(onClick = onBack) {
                 Text("返回书架")
             }
         }

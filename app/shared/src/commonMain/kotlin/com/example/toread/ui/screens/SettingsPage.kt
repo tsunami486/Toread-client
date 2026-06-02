@@ -17,6 +17,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import com.example.toread.platform.PlatformBackHandler
 import com.example.toread.settings.AuthMode
 import com.example.toread.settings.LocalSettingsRepository
 import com.example.toread.ui.components.ScreenColumn
@@ -28,6 +29,8 @@ internal fun SettingsPage(
     onLogout: () -> Unit,
 ) {
     var serverUrl by remember { mutableStateOf("http://localhost:8080") }
+    PlatformBackHandler(enabled = true, onBack = onBack)
+
     val authLabel = when (settingsRepository?.currentAuthMode()) {
         AuthMode.LoggedIn -> settingsRepository.userEmail()?.let { "已登录：$it" } ?: "已登录"
         AuthMode.Guest -> "游客模式"

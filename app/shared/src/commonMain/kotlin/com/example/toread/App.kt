@@ -105,7 +105,7 @@ fun ToreadApp() {
                 Box(
                     modifier = Modifier
                         .fillMaxSize()
-                        .padding(if (isReaderScreen) 0.dp else 24.dp),
+                        .padding(if (isReaderScreen) 0.dp else 12.dp),
                 ) {
                     when (screen) {
                         ToreadScreen.CheckingAuth -> CheckingAuthPage()
@@ -124,11 +124,12 @@ fun ToreadApp() {
                                 screen = ToreadScreen.Reader
                             },
                             onSettings = { screen = ToreadScreen.Settings },
+                            onSync = { refreshKey++ },
                         )
                         ToreadScreen.Import -> ImportPage(
                             importService = importService,
                             onImported = { refreshKey++ },
-                            onDone = {
+                            onBack = {
                                 refreshKey++
                                 screen = ToreadScreen.Bookshelf
                             },

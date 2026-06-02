@@ -15,15 +15,22 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Card
 import androidx.compose.material3.FilledTonalButton
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clipToBounds
@@ -136,16 +143,22 @@ internal fun AndroidReaderLayout(
     onBack: () -> Unit,
     onPrevious: () -> Unit,
     onNext: () -> Unit,
+    onGoToPage: (Int) -> Unit,
     onToggleControls: () -> Unit,
 ) {
     val systemBarInsets = rememberSystemBarInsets()
     val topInset = systemBarInsets.top
     val bottomInset = systemBarInsets.bottom
-    val readerTopPadding = if (controlsVisible) 20.dp + topInset else 20.dp
-    val readerBottomPadding = if (controlsVisible) 20.dp + bottomInset else 20.dp
+    val readerTopPadding = 10.dp + topInset
+    val readerBottomPadding = 10.dp + bottomInset
     val leftTapSource = remember { MutableInteractionSource() }
     val centerTapSource = remember { MutableInteractionSource() }
     val rightTapSource = remember { MutableInteractionSource() }
+    val chapterEntries = remember(pages) { pages.readerChapterEntries() }
+    val currentChapterOrd = pages.getOrNull(pageIndex)?.chapterOrd
+        ?: chapterEntries.lastOrNull { it.pageIndex <= pageIndex }?.chapterOrd
+        ?: 0
+    var chapterDrawerVisible by remember { mutableStateOf(false) }
 
     Box(modifier = Modifier.fillMaxSize()) {
         ReaderTextPage(
@@ -205,6 +218,19 @@ internal fun AndroidReaderLayout(
                 canNext = pageIndex < pages.lastIndex,
                 onPrevious = onPrevious,
                 onNext = onNext,
+                onOpenChapterList = { chapterDrawerVisible = true },
+            )
+        }
+        if (chapterDrawerVisible) {
+            AndroidChapterDrawer(
+                bookTitle = book.title,
+                chapters = chapterEntries,
+                currentChapterOrd = currentChapterOrd,
+                onDismiss = { chapterDrawerVisible = false },
+                onSelectChapter = { chapter ->
+                    chapterDrawerVisible = false
+                    onGoToPage(chapter.pageIndex)
+                },
             )
         }
     }
@@ -242,6 +268,7 @@ private fun BoxScope.AndroidReaderBottomPanel(
     canNext: Boolean,
     onPrevious: () -> Unit,
     onNext: () -> Unit,
+    onOpenChapterList: () -> Unit,
 ) {
     val bottomInset = rememberSystemBarInsets().bottom
 
@@ -277,7 +304,7 @@ private fun BoxScope.AndroidReaderBottomPanel(
                 horizontalArrangement = Arrangement.SpaceEvenly,
                 verticalAlignment = Alignment.CenterVertically,
             ) {
-                ReaderPanelButton(label = "目录", icon = "☰")
+                ReaderPanelButton(label = "目录", icon = "☰", onClick = onOpenChapterList)
                 ReaderPanelButton(label = "夜间", icon = "☾")
                 ReaderPanelButton(label = "设置", icon = "⚙")
             }
@@ -286,10 +313,115 @@ private fun BoxScope.AndroidReaderBottomPanel(
 }
 
 @Composable
-private fun ReaderPanelButton(label: String, icon: String) {
-    Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(4.dp)) {
+private fun ReaderPanelButton(label: String, icon: String, onClick: () -> Unit = {}) {
+    Column(
+        modifier = Modifier.clickable(onClick = onClick),
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.spacedBy(4.dp),
+    ) {
         Text(icon, fontSize = 28.sp)
         Text(label, style = MaterialTheme.typography.labelMedium)
+    }
+}
+
+@Composable
+private fun BoxScope.AndroidChapterDrawer(
+    bookTitle: String,
+    chapters: List<ReaderChapterEntry>,
+    currentChapterOrd: Int,
+    onDismiss: () -> Unit,
+    onSelectChapter: (ReaderChapterEntry) -> Unit,
+) {
+    val bottomInset = rememberSystemBarInsets().bottom
+    Box(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(Color.Black.copy(alpha = 0.45f))
+            .clickable(onClick = onDismiss),
+    )
+    Card(
+        modifier = Modifier
+            .align(Alignment.BottomCenter)
+            .fillMaxWidth()
+            .fillMaxHeight(0.74f),
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .background(Color(0xFF111516))
+                .padding(start = 24.dp, top = 10.dp, end = 24.dp, bottom = bottomInset + 12.dp),
+        ) {
+            Box(
+                modifier = Modifier
+                    .width(72.dp)
+                    .height(5.dp)
+                    .background(Color(0xFF8A8F93), RoundedCornerShape(50))
+                    .align(Alignment.CenterHorizontally),
+            )
+            Text(
+                text = bookTitle,
+                color = Color(0xFFF2F4F5),
+                fontSize = 26.sp,
+                fontWeight = FontWeight.SemiBold,
+                modifier = Modifier.padding(top = 26.dp),
+            )
+            Text(
+                text = "已读 ${chapters.count { it.chapterOrd < currentChapterOrd }} / 共 ${chapters.size} 章",
+                color = Color(0xFFC9CED1),
+                fontSize = 17.sp,
+                modifier = Modifier.padding(top = 18.dp, bottom = 14.dp),
+            )
+            if (chapters.isEmpty()) {
+                Text(
+                    text = "尚未识别到章节",
+                    color = Color(0xFF8A8F93),
+                    fontSize = 18.sp,
+                    modifier = Modifier.padding(top = 24.dp),
+                )
+            } else {
+                LazyColumn(modifier = Modifier.weight(1f)) {
+                    items(chapters, key = { it.chapterOrd }) { chapter ->
+                        AndroidChapterRow(
+                            chapter = chapter,
+                            currentChapterOrd = currentChapterOrd,
+                            onSelectChapter = onSelectChapter,
+                        )
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun AndroidChapterRow(
+    chapter: ReaderChapterEntry,
+    currentChapterOrd: Int,
+    onSelectChapter: (ReaderChapterEntry) -> Unit,
+) {
+    val textColor = when {
+        chapter.chapterOrd < currentChapterOrd -> Color(0xFF5F656A)
+        chapter.chapterOrd == currentChapterOrd -> Color(0xFFD8B66A)
+        else -> Color(0xFFF0F3F4)
+    }
+
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable { onSelectChapter(chapter) }
+            .padding(vertical = 18.dp),
+    ) {
+        Text(
+            text = chapter.title,
+            color = textColor,
+            fontSize = 21.sp,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+        )
+        HorizontalDivider(
+            modifier = Modifier.padding(top = 18.dp),
+            color = Color(0xFF252B2E),
+        )
     }
 }
 
@@ -339,6 +471,7 @@ private fun ReaderTextPage(
                         text = renderLine.text,
                         tokens = renderLine.line.tokens,
                         shouldJustify = renderLine.line.shouldJustify,
+                        isChapterTitle = renderLine.line.isChapterTitle,
                         firstLineIndentPx = renderLine.line.firstLineIndentPx,
                         extraTokenSpacingPx = renderLine.line.extraTokenSpacingPx,
                         textColor = textColor,
@@ -396,6 +529,7 @@ private fun ReaderTextLine(
     text: String,
     tokens: List<String>,
     shouldJustify: Boolean,
+    isChapterTitle: Boolean,
     firstLineIndentPx: Float,
     extraTokenSpacingPx: Float,
     textColor: Color,
@@ -406,7 +540,10 @@ private fun ReaderTextLine(
     val density = LocalDensity.current
     val indent = with(density) { firstLineIndentPx.toDp() }
     val justifyTokens = tokens.ifEmpty { text.map { it.toString() } }
-    val canJustify = shouldJustify && justifyTokens.size > 1
+    val canJustify = !isChapterTitle && shouldJustify && justifyTokens.size > 1
+    val displayFontSize = if (isChapterTitle) bodyFontSize * 1.35f else bodyFontSize
+    val displayLineHeight = if (isChapterTitle) bodyLineHeight * 1.35f else bodyLineHeight
+    val displayFontWeight = if (isChapterTitle) FontWeight.Bold else FontWeight.Normal
     if (canJustify) {
         ReaderJustifiedLine(
             tokens = justifyTokens,
@@ -425,8 +562,9 @@ private fun ReaderTextLine(
             Text(
                 text = text,
                 color = textColor,
-                fontSize = bodyFontSize,
-                lineHeight = bodyLineHeight,
+                fontSize = displayFontSize,
+                lineHeight = displayLineHeight,
+                fontWeight = displayFontWeight,
                 letterSpacing = 0.sp,
                 modifier = Modifier.padding(start = indent),
                 maxLines = 1,
