@@ -72,3 +72,8 @@ actual class BookFileStorage actual constructor() {
         )
     }
 }
+
+actual class CoverImageBytesLoader actual constructor() {
+    actual suspend fun load(path: String): ByteArray? =
+        runCatching { File(path).takeIf { it.isFile }?.readBytes() }.getOrNull()
+}

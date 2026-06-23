@@ -34,3 +34,7 @@ expect class BookFileStorage() {
         extension: String,
     ): StoredBookFile
 }
+
+expect class CoverImageBytesLoader() {
+    suspend fun load(path: String): ByteArray?
+}

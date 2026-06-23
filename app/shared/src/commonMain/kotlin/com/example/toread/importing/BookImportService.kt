@@ -6,6 +6,8 @@ import com.example.toread.platform.BookFileStorage
 import com.example.toread.platform.FileHasher
 import com.example.toread.platform.PlatformFile
 import com.example.toread.platform.PlatformFilePicker
+import com.example.toread.sync.BookMetadataJson
+import com.example.toread.sync.BookMetadataSyncPayload
 
 private val supportedExtensions = setOf("epub", "pdf", "txt")
 
@@ -15,6 +17,7 @@ class BookImportService(
     private val fileHasher: FileHasher = FileHasher(),
     private val bookFileStorage: BookFileStorage = BookFileStorage(),
     private val metadataParser: BookMetadataParser = BasicBookMetadataParser(),
+    private val coverExtractor: BookCoverExtractor = BookCoverExtractor(),
     private val clock: ImportClock = PlatformImportClock(),
 ) {
     suspend fun importSelectedFiles(): List<BookImportResult> =
@@ -38,25 +41,55 @@ class BookImportService(
 
         val storedFile = bookFileStorage.copyToPrivateBookDirectory(file, bookHash, extension)
         val metadata = metadataParser.parse(file, extension)
-        val now = clock.nowIsoString()
-
-        database.toreadDatabaseQueries.insertBook(
-            id = "book_$bookHash",
-            book_hash = bookHash,
-            title = metadata.title,
-            author = metadata.author,
+        val coverPath = coverExtractor.extractCover(
+            bookFilePath = storedFile.path,
+            bookHash = bookHash,
             format = extension,
-            file_path = storedFile.path,
-            cover_path = null,
-            file_size = storedFile.sizeBytes,
-            metadata_json = metadata.metadataJson,
-            reading_status = "unread",
-            last_read_at = null,
-            sync_status = "pending",
-            created_at = now,
-            updated_at = now,
-            archived_at = null,
         )
+        val now = clock.nowIsoString()
+        val syncPayload = BookMetadataJson.encode(
+            BookMetadataSyncPayload(
+                bookHash = bookHash,
+                title = metadata.title,
+                author = metadata.author,
+                format = extension,
+                metadataJson = BookMetadataJson.parseMetadataJson(metadata.metadataJson),
+                updatedAt = now,
+            ),
+        )
+
+        database.toreadDatabaseQueries.transaction {
+            database.toreadDatabaseQueries.insertBook(
+                id = "book_$bookHash",
+                book_hash = bookHash,
+                title = metadata.title,
+                author = metadata.author,
+                format = extension,
+                file_path = storedFile.path,
+                cover_path = coverPath,
+                file_size = storedFile.sizeBytes,
+                metadata_json = metadata.metadataJson,
+                reading_status = "unread",
+                last_read_at = null,
+                sync_status = "pending",
+                created_at = now,
+                updated_at = now,
+                archived_at = null,
+            )
+            database.toreadDatabaseQueries.insertSyncQueueItem(
+                id = "book_${bookHash}_$now",
+                entity_type = "book_metadata",
+                entity_id = bookHash,
+                action = "upsert",
+                payload_json = syncPayload,
+                sync_status = "pending",
+                retry_count = 0,
+                last_error = null,
+                created_at = now,
+                updated_at = now,
+                next_retry_at = null,
+            )
+        }
 
         return BookImportResult.Imported(
             bookHash = bookHash,
@@ -127,6 +160,7 @@ private fun PlatformFile.extension(): String? {
 
 private fun isAcceptedMimeType(extension: String, mimeType: String): Boolean = when (extension) {
     "epub" -> mimeType in setOf(
+        "application/epub",
         "application/epub+zip",
         "application/x-epub+zip",
         "application/zip",

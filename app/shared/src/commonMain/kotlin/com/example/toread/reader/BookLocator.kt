@@ -16,6 +16,9 @@ data class EpubLocator(
     val chapterIndex: Int,
     val chapterProgress: Double,
     override val globalProgress: Double,
+    val charOffset: Long? = null,
+    val unitIndex: Int? = null,
+    val textOffset: Int? = null,
     val cfi: String? = null,
 ) : BookLocator()
 

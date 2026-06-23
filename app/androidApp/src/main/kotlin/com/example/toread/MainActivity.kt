@@ -14,6 +14,7 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.tooling.preview.Preview
 import com.example.toread.database.AndroidAppContext
+import com.example.toread.platform.AppBackgroundNotifier
 import com.example.toread.platform.AndroidBackHandlerBridge
 import com.example.toread.platform.AndroidFileAccessBridge
 import com.example.toread.platform.AndroidPlatformFilePickerBridge
@@ -70,6 +71,11 @@ class MainActivity : ComponentActivity() {
         setContent {
             App()
         }
+    }
+
+    override fun onStop() {
+        AppBackgroundNotifier.notifyEnterBackground()
+        super.onStop()
     }
 
     private fun Uri.toPlatformFile(): PlatformFile {

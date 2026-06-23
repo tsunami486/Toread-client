@@ -10,6 +10,22 @@ class ReadingProgressRepository(
     private val database: ToreadDatabase,
     private val clock: ProgressClock = PlatformProgressClock(),
 ) {
+    fun localProgressSnapshot(bookHash: String): ReadingProgressSnapshot? {
+        val row = database.toreadDatabaseQueries
+            .selectProgressByBookHash(bookHash)
+            .executeAsOneOrNull()
+            ?: return null
+        return ReadingProgressSnapshot(
+            bookHash = row.book_hash,
+            format = row.format,
+            locator = runCatching { BookLocatorJson.decode(row.locator_json) }.getOrNull(),
+            progress = row.progress,
+            deviceId = row.device_id,
+            syncStatus = row.sync_status,
+            updatedAt = row.updated_at,
+        )
+    }
+
     fun saveLocalProgress(
         bookHash: String,
         format: String,
@@ -21,7 +37,7 @@ class ReadingProgressRepository(
             .selectProgressByBookHash(bookHash)
             .executeAsOneOrNull()
 
-        if (existing != null && existing.updated_at > updatedAt) {
+        if (existing != null && isIsoTimestampAfter(existing.updated_at, updatedAt)) {
             return SaveProgressResult.IgnoredOlder(existing.updated_at)
         }
 
@@ -67,6 +83,12 @@ class ReadingProgressRepository(
                 book_hash = bookHash,
             )
 
+            database.toreadDatabaseQueries.markSyncQueueItemsSupersededForEntity(
+                updated_at = updatedAt,
+                entity_type = "reading_progress",
+                entity_id = bookHash,
+            )
+
             database.toreadDatabaseQueries.insertSyncQueueItem(
                 id = "progress_${bookHash}_$updatedAt",
                 entity_type = "reading_progress",
@@ -96,7 +118,7 @@ class ReadingProgressRepository(
             .selectProgressByBookHash(bookHash)
             .executeAsOneOrNull()
 
-        if (existing != null && existing.updated_at > updatedAt) {
+        if (existing != null && isIsoTimestampAfter(existing.updated_at, updatedAt)) {
             return ApplyProgressResult.IgnoredOlder(existing.updated_at)
         }
 
@@ -139,6 +161,16 @@ sealed interface ApplyProgressResult {
     data class Applied(val updatedAt: String) : ApplyProgressResult
     data class IgnoredOlder(val currentUpdatedAt: String) : ApplyProgressResult
 }
+
+data class ReadingProgressSnapshot(
+    val bookHash: String,
+    val format: String,
+    val locator: BookLocator?,
+    val progress: Double,
+    val deviceId: String?,
+    val syncStatus: String,
+    val updatedAt: String,
+)
 
 private enum class SyncStatus(val value: String) {
     Pending("pending"),

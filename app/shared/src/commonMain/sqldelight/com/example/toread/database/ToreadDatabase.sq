@@ -138,6 +138,12 @@ UPDATE local_books
 SET sync_status = ?, updated_at = ?
 WHERE book_hash = ?;
 
+updateBookCoverPath:
+UPDATE local_books
+SET cover_path = ?,
+    updated_at = ?
+WHERE book_hash = ?;
+
 updateBookLastReadAt:
 UPDATE local_books
 SET last_read_at = ?,
@@ -227,9 +233,21 @@ WHERE id = ?;
 selectPendingSyncQueue:
 SELECT *
 FROM sync_queue
-WHERE sync_status = 'pending'
+WHERE sync_status IN ('pending', 'failed')
   AND (next_retry_at IS NULL OR next_retry_at <= ?)
 ORDER BY created_at ASC;
+
+selectSyncQueueItemById:
+SELECT *
+FROM sync_queue
+WHERE id = ?;
+
+selectActiveSyncQueueItemsByEntity:
+SELECT *
+FROM sync_queue
+WHERE entity_type = ?
+  AND entity_id = ?
+  AND sync_status IN ('pending', 'failed');
 
 insertSyncQueueItem:
 INSERT INTO sync_queue(
@@ -260,6 +278,33 @@ SET sync_status = 'failed',
     updated_at = ?,
     next_retry_at = ?
 WHERE id = ?;
+
+markSyncQueueItemSuperseded:
+UPDATE sync_queue
+SET sync_status = 'superseded',
+    updated_at = ?
+WHERE id = ?;
+
+markSyncQueueItemsSupersededForEntity:
+UPDATE sync_queue
+SET sync_status = 'superseded',
+    updated_at = :updated_at
+WHERE entity_type = :entity_type
+  AND entity_id = :entity_id
+  AND sync_status IN ('pending', 'failed');
+
+updateProgressSyncStatus:
+UPDATE local_progress
+SET sync_status = ?
+WHERE book_hash = ?
+  AND updated_at = ?;
+
+markProgressUploaded:
+UPDATE local_progress
+SET sync_status = 'synced',
+    updated_at = :server_updated_at
+WHERE book_hash = :book_hash
+  AND updated_at = :local_updated_at;
 
 getSetting:
 SELECT *

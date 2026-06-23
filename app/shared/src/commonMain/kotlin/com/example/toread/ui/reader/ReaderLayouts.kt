@@ -1,5 +1,6 @@
 package com.example.toread.ui.reader
 
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
@@ -26,6 +27,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -35,7 +37,9 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.layout.Layout
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
@@ -43,8 +47,13 @@ import androidx.compose.ui.unit.TextUnit
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.toread.library.BookshelfBook
+import com.example.toread.reader.EpubImageBytesLoader
 import com.example.toread.platform.rememberSystemBarInsets
 import com.example.toread.ui.components.ScreenColumn
+import com.example.toread.ui.theme.toreadColors
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
+import org.jetbrains.compose.resources.decodeToImageBitmap
 import kotlin.math.min
 import kotlin.math.roundToInt
 @Composable
@@ -70,7 +79,7 @@ internal fun DesktopReaderLayout(
             verticalAlignment = Alignment.CenterVertically,
         ) {
             TextButton(onClick = onBack) {
-                Text("‹ ${book.title}", color = Color(0xFFE4EAEC))
+                Text("‹ ${book.title}", color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
                 FilledTonalButton(onClick = onPrevious, enabled = pageIndex > 0) {
@@ -92,7 +101,7 @@ internal fun DesktopReaderLayout(
             Row(
                 modifier = Modifier
                     .fillMaxSize()
-                    .background(Color(0xFF171D1E))
+                    .background(MaterialTheme.toreadColors.readerPage)
                     .padding(horizontal = 34.dp, vertical = 30.dp),
                 horizontalArrangement = Arrangement.spacedBy(30.dp),
             ) {
@@ -102,7 +111,7 @@ internal fun DesktopReaderLayout(
                     modifier = Modifier
                         .weight(1f)
                         .fillMaxHeight(),
-                    textColor = Color(0xFFF3F7F8),
+                    textColor = MaterialTheme.colorScheme.onSurface,
                     bodyFontSize = 22.sp,
                     bodyLineHeight = 34.sp,
                 )
@@ -110,7 +119,7 @@ internal fun DesktopReaderLayout(
                     modifier = Modifier
                         .width(1.dp)
                         .fillMaxHeight()
-                        .background(Color(0xFF2A3234)),
+                        .background(MaterialTheme.toreadColors.readerDivider),
                 )
                 ReaderTextPage(
                     page = pages.getOrNull(pageIndex + 1) ?: ReaderPageSlice(book.title, 0, 0),
@@ -118,7 +127,7 @@ internal fun DesktopReaderLayout(
                     modifier = Modifier
                         .weight(1f)
                         .fillMaxHeight(),
-                    textColor = Color(0xFFF3F7F8),
+                    textColor = MaterialTheme.colorScheme.onSurface,
                     bodyFontSize = 22.sp,
                     bodyLineHeight = 34.sp,
                 )
@@ -126,8 +135,8 @@ internal fun DesktopReaderLayout(
         }
 
         Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-            Text("第 ${pageIndex + 1}-${min(pageIndex + 2, pages.size)} 页", color = Color(0xFFB8C2C5))
-            Text("${(progress * 100).roundToInt()}%", color = Color(0xFFB8C2C5))
+            Text("第 ${pageIndex + 1}-${min(pageIndex + 2, pages.size)} 页", color = MaterialTheme.colorScheme.onSurfaceVariant)
+            Text("${(progress * 100).roundToInt()}%", color = MaterialTheme.colorScheme.onSurfaceVariant)
         }
     }
 }
@@ -336,7 +345,7 @@ private fun BoxScope.AndroidChapterDrawer(
     Box(
         modifier = Modifier
             .fillMaxSize()
-            .background(Color.Black.copy(alpha = 0.45f))
+            .background(MaterialTheme.toreadColors.readerScrim)
             .clickable(onClick = onDismiss),
     )
     Card(
@@ -348,33 +357,33 @@ private fun BoxScope.AndroidChapterDrawer(
         Column(
             modifier = Modifier
                 .fillMaxSize()
-                .background(Color(0xFF111516))
+                .background(MaterialTheme.colorScheme.surface)
                 .padding(start = 24.dp, top = 10.dp, end = 24.dp, bottom = bottomInset + 12.dp),
         ) {
             Box(
                 modifier = Modifier
                     .width(72.dp)
                     .height(5.dp)
-                    .background(Color(0xFF8A8F93), RoundedCornerShape(50))
+                    .background(MaterialTheme.colorScheme.outlineVariant, RoundedCornerShape(50))
                     .align(Alignment.CenterHorizontally),
             )
             Text(
                 text = bookTitle,
-                color = Color(0xFFF2F4F5),
+                color = MaterialTheme.colorScheme.onSurface,
                 fontSize = 26.sp,
                 fontWeight = FontWeight.SemiBold,
                 modifier = Modifier.padding(top = 26.dp),
             )
             Text(
                 text = "已读 ${chapters.count { it.chapterOrd < currentChapterOrd }} / 共 ${chapters.size} 章",
-                color = Color(0xFFC9CED1),
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
                 fontSize = 17.sp,
                 modifier = Modifier.padding(top = 18.dp, bottom = 14.dp),
             )
             if (chapters.isEmpty()) {
                 Text(
                     text = "尚未识别到章节",
-                    color = Color(0xFF8A8F93),
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
                     fontSize = 18.sp,
                     modifier = Modifier.padding(top = 24.dp),
                 )
@@ -400,9 +409,9 @@ private fun AndroidChapterRow(
     onSelectChapter: (ReaderChapterEntry) -> Unit,
 ) {
     val textColor = when {
-        chapter.chapterOrd < currentChapterOrd -> Color(0xFF5F656A)
-        chapter.chapterOrd == currentChapterOrd -> Color(0xFFD8B66A)
-        else -> Color(0xFFF0F3F4)
+        chapter.chapterOrd < currentChapterOrd -> MaterialTheme.toreadColors.readChapter
+        chapter.chapterOrd == currentChapterOrd -> MaterialTheme.toreadColors.currentChapter
+        else -> MaterialTheme.toreadColors.unreadChapter
     }
 
     Column(
@@ -420,7 +429,7 @@ private fun AndroidChapterRow(
         )
         HorizontalDivider(
             modifier = Modifier.padding(top = 18.dp),
-            color = Color(0xFF252B2E),
+            color = MaterialTheme.colorScheme.outlineVariant,
         )
     }
 }
@@ -434,7 +443,7 @@ private fun ReaderTextPage(
     bodyFontSize: TextUnit,
     bodyLineHeight: TextUnit,
 ) {
-    val pageLines = page.lines.ifEmpty {
+    val fallbackLine = page.lines.ifEmpty {
         listOf(
             ReaderTextLineInfo(
                 startOffset = page.startOffset,
@@ -445,50 +454,75 @@ private fun ReaderTextPage(
             ),
         )
     }
+    val pageItems = page.items.ifEmpty {
+        fallbackLine.map { ReaderPageItem.TextLine(it) }
+    }
 
     val density = LocalDensity.current
     val baseLineHeightPx = with(density) { bodyLineHeight.toPx() }
-    val renderLines = pageLines.map { line ->
-        val lineHeightPx = line.lineHeightPx.coerceAtLeast(baseLineHeightPx * 0.5f)
-        ReaderRenderLine(
-            line = line,
-            text = line.textFrom(sourceText),
-            lineHeightPx = lineHeightPx,
-            lineHeightDp = with(density) { lineHeightPx.toDp() },
-        )
+    val renderItems = pageItems.map { item ->
+        when (item) {
+            is ReaderPageItem.TextLine -> {
+                val lineHeightPx = item.line.lineHeightPx.coerceAtLeast(baseLineHeightPx * 0.5f)
+                ReaderRenderItem.Text(
+                    line = item.line,
+                    text = item.line.textFrom(sourceText),
+                    heightPx = lineHeightPx,
+                    heightDp = with(density) { lineHeightPx.toDp() },
+                )
+            }
+            is ReaderPageItem.ImageBlock -> {
+                val heightPx = item.image.heightPx.coerceAtLeast(baseLineHeightPx * 2f)
+                ReaderRenderItem.Image(
+                    image = item.image,
+                    heightPx = heightPx,
+                    heightDp = with(density) { heightPx.toDp() },
+                )
+            }
+        }
     }
+    val imageLoader = remember { EpubImageBytesLoader() }
 
     Layout(
         modifier = modifier
             .fillMaxSize()
             .clipToBounds(),
         content = {
-            renderLines.forEach { renderLine ->
-                if (renderLine.text.isBlank()) {
-                    Box(modifier = Modifier.fillMaxWidth().height(renderLine.lineHeightDp))
-                } else {
-                    ReaderTextLine(
-                        text = renderLine.text,
-                        tokens = renderLine.line.tokens,
-                        shouldJustify = renderLine.line.shouldJustify,
-                        isChapterTitle = renderLine.line.isChapterTitle,
-                        firstLineIndentPx = renderLine.line.firstLineIndentPx,
-                        extraTokenSpacingPx = renderLine.line.extraTokenSpacingPx,
-                        textColor = textColor,
-                        bodyFontSize = bodyFontSize,
-                        bodyLineHeight = bodyLineHeight,
-                        lineHeight = renderLine.lineHeightDp,
+            renderItems.forEach { renderItem ->
+                when (renderItem) {
+                    is ReaderRenderItem.Text -> {
+                        if (renderItem.text.isBlank()) {
+                            Box(modifier = Modifier.fillMaxWidth().height(renderItem.heightDp))
+                        } else {
+                            ReaderTextLine(
+                                text = renderItem.text,
+                                tokens = renderItem.line.tokens,
+                                shouldJustify = renderItem.line.shouldJustify,
+                                isChapterTitle = renderItem.line.isChapterTitle,
+                                firstLineIndentPx = renderItem.line.firstLineIndentPx,
+                                extraTokenSpacingPx = renderItem.line.extraTokenSpacingPx,
+                                textColor = textColor,
+                                bodyFontSize = bodyFontSize,
+                                bodyLineHeight = bodyLineHeight,
+                                lineHeight = renderItem.heightDp,
+                            )
+                        }
+                    }
+                    is ReaderRenderItem.Image -> ReaderImageBlock(
+                        image = renderItem.image,
+                        imageLoader = imageLoader,
+                        height = renderItem.heightDp,
                     )
                 }
             }
         },
     ) { measurables, constraints ->
-        val lineHeightsPx = renderLines.map { line ->
-            line.lineHeightPx.roundToInt().coerceAtLeast(1)
+        val itemHeightsPx = renderItems.map { item ->
+            item.heightPx.roundToInt().coerceAtLeast(1)
         }
-        val totalLineHeightPx = lineHeightsPx.sum()
-        val rawExtraGapPx = if (lineHeightsPx.size > 1) {
-            (constraints.maxHeight - totalLineHeightPx).toFloat() / (lineHeightsPx.size - 1)
+        val totalItemHeightPx = itemHeightsPx.sum()
+        val rawExtraGapPx = if (itemHeightsPx.size > 1) {
+            (constraints.maxHeight - totalItemHeightPx).toFloat() / (itemHeightsPx.size - 1)
         } else {
             0f
         }
@@ -496,13 +530,13 @@ private fun ReaderTextPage(
             .takeIf { it > 0f && it <= baseLineHeightPx * 0.75f }
             ?: 0f
         val placeables = measurables.mapIndexed { index, measurable ->
-            val lineHeightPx = lineHeightsPx.getOrElse(index) { baseLineHeightPx.roundToInt().coerceAtLeast(1) }
+            val itemHeightPx = itemHeightsPx.getOrElse(index) { baseLineHeightPx.roundToInt().coerceAtLeast(1) }
             measurable.measure(
                 constraints.copy(
                     minWidth = constraints.maxWidth,
                     maxWidth = constraints.maxWidth,
-                    minHeight = lineHeightPx,
-                    maxHeight = lineHeightPx,
+                    minHeight = itemHeightPx,
+                    maxHeight = itemHeightPx,
                 ),
             )
         }
@@ -517,12 +551,76 @@ private fun ReaderTextPage(
     }
 }
 
-private data class ReaderRenderLine(
-    val line: ReaderTextLineInfo,
-    val text: String,
-    val lineHeightPx: Float,
-    val lineHeightDp: androidx.compose.ui.unit.Dp,
-)
+private sealed class ReaderRenderItem {
+    abstract val heightPx: Float
+    abstract val heightDp: androidx.compose.ui.unit.Dp
+
+    data class Text(
+        val line: ReaderTextLineInfo,
+        val text: String,
+        override val heightPx: Float,
+        override val heightDp: androidx.compose.ui.unit.Dp,
+    ) : ReaderRenderItem()
+
+    data class Image(
+        val image: ReaderImageBlockInfo,
+        override val heightPx: Float,
+        override val heightDp: androidx.compose.ui.unit.Dp,
+    ) : ReaderRenderItem()
+}
+
+@Composable
+private fun ReaderImageBlock(
+    image: ReaderImageBlockInfo,
+    imageLoader: EpubImageBytesLoader,
+    height: androidx.compose.ui.unit.Dp,
+) {
+    var bitmap by remember(image.resource) { mutableStateOf<ImageBitmap?>(null) }
+    var failed by remember(image.resource) { mutableStateOf(false) }
+
+    LaunchedEffect(image.resource) {
+        failed = false
+        bitmap = withContext(Dispatchers.Default) {
+            runCatching {
+                imageLoader.load(image.resource)?.decodeToImageBitmap()
+            }.getOrNull()
+        }
+        failed = bitmap == null
+    }
+
+    Box(
+        modifier = Modifier
+            .fillMaxWidth()
+            .height(height),
+        contentAlignment = Alignment.Center,
+    ) {
+        val loadedBitmap = bitmap
+        if (loadedBitmap != null) {
+            Image(
+                bitmap = loadedBitmap,
+                contentDescription = image.resource.alt,
+                contentScale = ContentScale.Fit,
+                modifier = Modifier.fillMaxSize(),
+            )
+        } else if (failed) {
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(height)
+                    .background(MaterialTheme.colorScheme.surfaceVariant),
+                contentAlignment = Alignment.Center,
+            ) {
+                Text(
+                    text = image.resource.alt?.takeIf { it.isNotBlank() } ?: "图片无法显示",
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    style = MaterialTheme.typography.bodyMedium,
+                )
+            }
+        }
+    }
+}
 
 @Composable
 private fun ReaderTextLine(

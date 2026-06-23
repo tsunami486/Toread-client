@@ -1,11 +1,5 @@
 package com.example.toread.ui.screens
 
-import androidx.compose.animation.core.LinearEasing
-import androidx.compose.animation.core.RepeatMode
-import androidx.compose.animation.core.animateFloat
-import androidx.compose.animation.core.infiniteRepeatable
-import androidx.compose.animation.core.rememberInfiniteTransition
-import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.focusable
 import androidx.compose.foundation.layout.Box
@@ -22,14 +16,11 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.rotate
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.key.Key
 import androidx.compose.ui.input.key.KeyEventType
 import androidx.compose.ui.input.key.key
@@ -42,24 +33,37 @@ import com.example.toread.Platform
 import com.example.toread.PlatformKind
 import com.example.toread.library.BookshelfBook
 import com.example.toread.library.BookshelfRepository
+import com.example.toread.logging.ToreadClientLog
 import com.example.toread.platform.PlatformBackHandler
 import com.example.toread.platform.SystemBarsController
 import com.example.toread.platform.rememberSystemBarInsets
+import com.example.toread.progress.ApplyProgressResult
 import com.example.toread.progress.ReadingProgressRepository
+import com.example.toread.progress.ReadingProgressSnapshot
+import com.example.toread.progress.isIsoTimestampAfter
 import com.example.toread.reader.BookLocator
 import com.example.toread.reader.ReaderContentLoader
 import com.example.toread.reader.ReaderDocument
+import com.example.toread.reader.TxtLocator
+import com.example.toread.sync.ProgressSyncScheduler
+import com.example.toread.sync.ReadingProgressRemoteSource
+import com.example.toread.sync.RemoteProgressFetchResult
+import com.example.toread.sync.RemoteReadingProgress
 import com.example.toread.ui.components.ScreenColumn
 import com.example.toread.ui.reader.AndroidReaderLayout
 import com.example.toread.ui.reader.DesktopReaderLayout
 import com.example.toread.ui.reader.ReaderMessage
 import com.example.toread.ui.reader.ReaderPageSlice
+import com.example.toread.ui.reader.ReaderProgressRemoteSyncPolicy
 import com.example.toread.ui.reader.normalizePageIndex
 import com.example.toread.ui.reader.pageProgress
 import com.example.toread.ui.reader.paginateForReader
 import com.example.toread.ui.reader.rememberReaderPaginationSpec
 import com.example.toread.ui.reader.saveReaderProgress
 import com.example.toread.ui.reader.toPageIndex
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import kotlin.math.roundToInt
 @Composable
 internal fun ReaderPage(
@@ -67,10 +71,13 @@ internal fun ReaderPage(
     platform: Platform,
     bookshelfRepository: BookshelfRepository?,
     progressRepository: ReadingProgressRepository?,
+    progressSyncScheduler: ProgressSyncScheduler?,
+    remoteProgressSource: ReadingProgressRemoteSource?,
+    progressSaveScope: CoroutineScope,
     readerContentLoader: ReaderContentLoader,
+    onProgressSyncFinished: () -> Unit = {},
     onBack: () -> Unit,
 ) {
-    val scope = rememberCoroutineScope()
     val isAndroid = platform.kind == PlatformKind.Android
     val isDesktop = platform.kind == PlatformKind.Desktop
     val density = LocalDensity.current
@@ -106,13 +113,20 @@ internal fun ReaderPage(
         if (currentBook != null && measuredPages.isNotEmpty()) {
             val targetPage = pageIndex.coerceIn(0, measuredPages.lastIndex.coerceAtLeast(0))
             saveReaderProgress(
-                scope = scope,
+                scope = progressSaveScope,
                 progressRepository = progressRepository,
+                progressSyncScheduler = progressSyncScheduler,
+                remoteSyncPolicy = ReaderProgressRemoteSyncPolicy.Immediate,
                 book = currentBook,
                 pageIndex = targetPage,
                 pageCount = measuredPages.size,
                 charOffset = measuredPages.getOrNull(targetPage)?.startOffset ?: 0,
+                chapterOrd = measuredPages.getOrNull(targetPage)?.chapterOrd,
+                startLocator = measuredPages.getOrNull(targetPage)?.startLocator,
+                chapterHref = measuredPages.getOrNull(targetPage)?.chapterHref,
+                sourceLength = document?.text?.length ?: 0,
                 deviceId = platform.name,
+                onSyncFinished = onProgressSyncFinished,
             )
         }
         exitReaderWithoutProgress()
@@ -124,12 +138,20 @@ internal fun ReaderPage(
         error = null
         restoredLocator = null
         restoredForMeasuredPages = false
+        val openingProgress = resolveOpeningProgress(
+            book = book,
+            progressRepository = progressRepository,
+            remoteProgressSource = remoteProgressSource,
+        )
         runCatching {
-            readerContentLoader.load(book.filePath, book.format, book.title)
+            withContext(Dispatchers.Default) {
+                readerContentLoader.load(book.filePath, book.format, book.title)
+            }
         }.fold(
             onSuccess = { loaded ->
                 document = loaded
-                restoredLocator = bookshelfRepository?.progressLocator(book.bookHash)
+                restoredLocator = openingProgress?.locator
+                    ?: bookshelfRepository?.progressLocator(book.bookHash)
             },
             onFailure = { throwable ->
                 error = "打开失败：${throwable.message ?: "未知错误"}"
@@ -166,9 +188,7 @@ internal fun ReaderPage(
         .fillMaxSize()
 
     Box(
-        modifier = readerModifier.background(
-            if (isDesktop) Color(0xFF101415) else MaterialTheme.colorScheme.background,
-        ),
+        modifier = readerModifier.background(MaterialTheme.colorScheme.background),
     ) {
         when {
             error != null -> ReaderMessage(message = error.orEmpty(), onBack = ::exitReaderWithoutProgress)
@@ -193,12 +213,8 @@ internal fun ReaderPage(
                     paginationComplete = false
                     restoredForMeasuredPages = false
                     desktopReaderFocusReady = false
-                    var lastPublishedPageCount = 0
-                    measuredPages = loadedDocument.paginateForReader(spec) { partialPages ->
-                        if (partialPages.size <= 4 || partialPages.size - lastPublishedPageCount >= 24) {
-                            measuredPages = partialPages
-                            lastPublishedPageCount = partialPages.size
-                        }
+                    measuredPages = withContext(Dispatchers.Default) {
+                        loadedDocument.paginateForReader(spec)
                     }
                     paginationComplete = true
                 }
@@ -207,10 +223,26 @@ internal fun ReaderPage(
 
                 LaunchedEffect(book.bookHash, pages.size, restoredForMeasuredPages, isDesktop, paginationComplete) {
                     if (!restoredForMeasuredPages && pages.isNotEmpty() && paginationComplete) {
-                        pageIndex = normalizePageIndex(
-                            restoredLocator?.toPageIndex(pages.size) ?: 0,
+                        val requestedPage = restoredLocator?.toPageIndex(pages) ?: 0
+                        val normalizedPage = normalizePageIndex(
+                            requestedPage,
                             pages.size,
                             isDesktop,
+                        )
+                        val chosenPage = pages.getOrNull(normalizedPage)
+                        pageIndex = normalizedPage
+                        ToreadClientLog.info(
+                            LogArea,
+                            "reader.seek",
+                            "bookHash" to book.bookHash,
+                            "locator" to restoredLocator.describeLocator(),
+                            "targetCharOffset" to restoredLocator.readerCharOffset(),
+                            "requestedPage" to requestedPage,
+                            "chosenPage" to normalizedPage,
+                            "chosenPageStartOffset" to chosenPage?.startOffset,
+                            "chosenPageEndOffset" to chosenPage?.endOffset,
+                            "pageCount" to pages.size,
+                            "platform" to if (isDesktop) "desktop" else "android",
                         )
                         restoredForMeasuredPages = true
                     }
@@ -219,15 +251,29 @@ internal fun ReaderPage(
                 val currentPageIndex = pageIndex.coerceIn(0, pages.lastIndex.coerceAtLeast(0))
                 val progress = currentPageIndex.pageProgress(pages.size)
 
-                fun saveCurrentProgress(targetPage: Int = currentPageIndex) {
+                fun saveCurrentProgress(
+                    targetPage: Int = currentPageIndex,
+                    remoteSyncPolicy: ReaderProgressRemoteSyncPolicy = ReaderProgressRemoteSyncPolicy.Debounced,
+                ) {
                     saveReaderProgress(
-                        scope = scope,
+                        scope = progressSaveScope,
                         progressRepository = progressRepository,
+                        progressSyncScheduler = progressSyncScheduler,
+                        remoteSyncPolicy = remoteSyncPolicy,
                         book = book,
                         pageIndex = targetPage,
                         pageCount = pages.size,
                         charOffset = pages.getOrNull(targetPage)?.startOffset ?: 0,
+                        chapterOrd = pages.getOrNull(targetPage)?.chapterOrd,
+                        startLocator = pages.getOrNull(targetPage)?.startLocator,
+                        chapterHref = pages.getOrNull(targetPage)?.chapterHref,
+                        sourceLength = loadedDocument.text.length,
                         deviceId = platform.name,
+                        onSyncFinished = if (remoteSyncPolicy == ReaderProgressRemoteSyncPolicy.Immediate) {
+                            onProgressSyncFinished
+                        } else {
+                            null
+                        },
                     )
                 }
 
@@ -243,7 +289,7 @@ internal fun ReaderPage(
                 }
 
                 fun exitReader() {
-                    saveCurrentProgress()
+                    saveCurrentProgress(remoteSyncPolicy = ReaderProgressRemoteSyncPolicy.Immediate)
                     exitReaderWithoutProgress()
                 }
 
@@ -324,24 +370,133 @@ internal fun ReaderPage(
 
 @Composable
 private fun ReaderLoadingIndicator() {
-    val infiniteTransition = rememberInfiniteTransition(label = "reader-loading")
-    val rotation by infiniteTransition.animateFloat(
-        initialValue = 0f,
-        targetValue = 360f,
-        animationSpec = infiniteRepeatable(
-            animation = tween(durationMillis = 90, easing = LinearEasing),
-            repeatMode = RepeatMode.Restart,
-        ),
-        label = "reader-loading-rotation",
-    )
-
     Box(
         modifier = Modifier.fillMaxSize(),
         contentAlignment = Alignment.Center,
     ) {
-        CircularProgressIndicator(
-            progress = { 0.68f },
-            modifier = Modifier.rotate(rotation),
-        )
+        CircularProgressIndicator()
     }
 }
+
+private suspend fun resolveOpeningProgress(
+    book: BookshelfBook,
+    progressRepository: ReadingProgressRepository?,
+    remoteProgressSource: ReadingProgressRemoteSource?,
+): ChosenReaderProgress? {
+    val bookHash = book.bookHash
+    ToreadClientLog.info(LogArea, "reader.open.start", "bookHash" to bookHash)
+
+    val localProgress = progressRepository?.localProgressSnapshot(bookHash)
+
+    val remoteResult = remoteProgressSource?.fetch(bookHash)
+        ?: RemoteProgressFetchResult.Unavailable("远端进度源未初始化")
+
+    val remoteProgress = (remoteResult as? RemoteProgressFetchResult.Found)?.progress
+    ToreadClientLog.info(
+        LogArea,
+        "reader.open.progress",
+        "bookHash" to bookHash,
+        "fetchStatus" to remoteResult.fetchStatus(),
+        "fetchError" to remoteResult.fetchError(),
+        "localUpdatedAt" to localProgress?.updatedAt,
+        "localProgress" to localProgress?.progress,
+        "localSyncStatus" to localProgress?.syncStatus,
+        "localLocator" to localProgress?.locator.describeLocator(),
+        "remoteUpdatedAt" to remoteProgress?.updatedAt,
+        "remoteProgress" to remoteProgress?.progress,
+        "remoteLocator" to remoteProgress?.locator.describeLocator(),
+    )
+
+    val chosen = when {
+        remoteProgress != null && remoteProgress.isNewerThan(localProgress) -> {
+            val applied = progressRepository?.applyRemoteProgress(
+                bookHash = bookHash,
+                format = book.format,
+                locator = remoteProgress.locator,
+                deviceId = null,
+                updatedAt = remoteProgress.updatedAt,
+            )
+            when (applied) {
+                is ApplyProgressResult.Applied,
+                null -> ChosenReaderProgress(
+                    source = "remote",
+                    locator = remoteProgress.locator,
+                    updatedAt = remoteProgress.updatedAt,
+                    progress = remoteProgress.progress,
+                )
+                is ApplyProgressResult.IgnoredOlder -> {
+                    val latestLocal = progressRepository.localProgressSnapshot(bookHash)
+                    ChosenReaderProgress(
+                        source = "local_after_remote_ignored",
+                        locator = latestLocal?.locator,
+                        updatedAt = latestLocal?.updatedAt,
+                        progress = latestLocal?.progress,
+                    )
+                }
+            }
+        }
+        localProgress?.locator != null -> ChosenReaderProgress(
+            source = "local",
+            locator = localProgress.locator,
+            updatedAt = localProgress.updatedAt,
+            progress = localProgress.progress,
+        )
+        else -> null
+    }
+
+    ToreadClientLog.info(
+        LogArea,
+        "reader.open.choose",
+        "bookHash" to bookHash,
+        "source" to chosen?.source,
+        "chosenUpdatedAt" to chosen?.updatedAt,
+        "chosenProgress" to chosen?.progress,
+        "chosenLocator" to chosen?.locator.describeLocator(),
+    )
+    return chosen
+}
+
+private data class ChosenReaderProgress(
+    val source: String,
+    val locator: BookLocator?,
+    val updatedAt: String?,
+    val progress: Double?,
+)
+
+private fun RemoteReadingProgress.isNewerThan(localProgress: ReadingProgressSnapshot?): Boolean =
+    localProgress == null || isIsoTimestampAfter(updatedAt, localProgress.updatedAt)
+
+private fun RemoteProgressFetchResult.fetchStatus(): String =
+    when (this) {
+        is RemoteProgressFetchResult.Found -> "found"
+        RemoteProgressFetchResult.NotFound -> "not_found"
+        is RemoteProgressFetchResult.Unavailable -> "unavailable"
+        is RemoteProgressFetchResult.Failed -> "failed"
+    }
+
+private fun RemoteProgressFetchResult.fetchError(): String? =
+    when (this) {
+        is RemoteProgressFetchResult.Unavailable -> reason
+        is RemoteProgressFetchResult.Failed -> message
+        else -> null
+    }
+
+private fun BookLocator?.describeLocator(): String =
+    when (this) {
+        is com.example.toread.reader.EpubLocator ->
+            "epub(chapterHref=$chapterHref, chapterIndex=$chapterIndex, chapterProgress=$chapterProgress, charOffset=$charOffset, unitIndex=$unitIndex, textOffset=$textOffset, globalProgress=$globalProgress, cfi=$cfi)"
+        is com.example.toread.reader.PdfLocator ->
+            "pdf(pageIndex=$pageIndex, pageOffsetY=$pageOffsetY, globalProgress=$globalProgress)"
+        is com.example.toread.reader.TxtLocator ->
+            "txt(charOffset=$charOffset, paragraphIndex=$paragraphIndex, globalProgress=$globalProgress)"
+        null -> "none"
+    }
+
+private fun BookLocator?.readerCharOffset(): Long? =
+    when (this) {
+        is com.example.toread.reader.EpubLocator -> charOffset
+        is com.example.toread.reader.TxtLocator -> charOffset
+        else -> null
+    }
+
+private const val LogArea = "sync"

@@ -3,6 +3,7 @@ package com.example.toread.reader
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertIs
+import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
 class BookLocatorJsonTest {
@@ -13,6 +14,9 @@ class BookLocatorJsonTest {
             chapterIndex = 12,
             chapterProgress = 0.42,
             globalProgress = 0.67,
+            charOffset = 3456,
+            unitIndex = 8,
+            textOffset = 120,
             cfi = null,
         )
 
@@ -21,6 +25,19 @@ class BookLocatorJsonTest {
 
         assertTrue(encoded.contains(""""type":"epub""""))
         assertEquals(locator, decoded)
+    }
+
+    @Test
+    fun oldEpubLocatorJsonDecodesWithoutCharOffset() {
+        val decoded = BookLocatorJson.decode(
+            """{"type":"epub","chapterHref":"chapter_12.xhtml","chapterIndex":12,"chapterProgress":0.42,"globalProgress":0.67,"cfi":null}""",
+        )
+
+        val locator = assertIs<EpubLocator>(decoded)
+        assertNull(locator.charOffset)
+        assertNull(locator.unitIndex)
+        assertNull(locator.textOffset)
+        assertEquals(0.67, locator.globalProgress)
     }
 
     @Test

@@ -34,6 +34,41 @@ class ReadingProgressRepositoryTest {
     }
 
     @Test
+    fun saveLocalProgressSupersedesOlderPendingProgressQueueItems() {
+        val database = testDatabase()
+        insertBook(database, "hash_queue")
+
+        ReadingProgressRepository(database, FixedProgressClock("2026-05-23T01:00:00Z"))
+            .saveLocalProgress(
+                bookHash = "hash_queue",
+                format = "txt",
+                locator = TxtLocator(charOffset = 100, globalProgress = 0.1),
+                deviceId = "desktop",
+            )
+        ReadingProgressRepository(database, FixedProgressClock("2026-05-23T01:00:01Z"))
+            .saveLocalProgress(
+                bookHash = "hash_queue",
+                format = "txt",
+                locator = TxtLocator(charOffset = 200, globalProgress = 0.2),
+                deviceId = "desktop",
+            )
+
+        val oldQueue = database.toreadDatabaseQueries
+            .selectSyncQueueItemById("progress_hash_queue_2026-05-23T01:00:00Z")
+            .executeAsOne()
+        val latestQueue = database.toreadDatabaseQueries
+            .selectSyncQueueItemById("progress_hash_queue_2026-05-23T01:00:01Z")
+            .executeAsOne()
+        val pendingItems = database.toreadDatabaseQueries
+            .selectPendingSyncQueue("2026-05-23T01:00:02Z")
+            .executeAsList()
+
+        assertEquals("superseded", oldQueue.sync_status)
+        assertEquals("pending", latestQueue.sync_status)
+        assertEquals(listOf(latestQueue.id), pendingItems.map { it.id })
+    }
+
+    @Test
     fun remoteProgressUsesLatestUpdatedAtWins() {
         val database = testDatabase()
         insertBook(database, "hash_b")
@@ -59,6 +94,34 @@ class ReadingProgressRepositoryTest {
         val progress = database.toreadDatabaseQueries.selectProgressByBookHash("hash_b").executeAsOne()
         assertEquals(0.1, progress.progress)
         assertEquals("2026-05-23T02:00:00Z", progress.updated_at)
+    }
+
+    @Test
+    fun remoteProgressComparesFractionalInstantTimestamps() {
+        val database = testDatabase()
+        insertBook(database, "hash_c")
+        val repository = ReadingProgressRepository(database, FixedProgressClock("2026-05-23T02:00:00Z"))
+
+        repository.applyRemoteProgress(
+            bookHash = "hash_c",
+            format = "txt",
+            locator = TxtLocator(charOffset = 100, globalProgress = 0.1),
+            deviceId = "android",
+            updatedAt = "2026-05-23T02:00:00.100Z",
+        )
+
+        val ignored = repository.applyRemoteProgress(
+            bookHash = "hash_c",
+            format = "txt",
+            locator = TxtLocator(charOffset = 900, globalProgress = 0.9),
+            deviceId = "desktop",
+            updatedAt = "2026-05-23T02:00:00Z",
+        )
+
+        assertIs<ApplyProgressResult.IgnoredOlder>(ignored)
+        val progress = database.toreadDatabaseQueries.selectProgressByBookHash("hash_c").executeAsOne()
+        assertEquals(0.1, progress.progress)
+        assertEquals("2026-05-23T02:00:00.100Z", progress.updated_at)
     }
 
     private fun testDatabase(): ToreadDatabase {

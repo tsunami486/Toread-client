@@ -7,6 +7,7 @@ import androidx.compose.foundation.layout.widthIn
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
@@ -25,10 +26,15 @@ import com.example.toread.ui.components.ScreenColumn
 @Composable
 internal fun SettingsPage(
     settingsRepository: LocalSettingsRepository?,
+    dynamicColorEnabled: Boolean,
+    defaultServerBaseUrl: String,
+    onDynamicColorEnabledChange: (Boolean) -> Unit,
     onBack: () -> Unit,
     onLogout: () -> Unit,
 ) {
-    var serverUrl by remember { mutableStateOf("http://localhost:8080") }
+    var serverUrl by remember(settingsRepository, defaultServerBaseUrl) {
+        mutableStateOf(settingsRepository?.serverBaseUrl(defaultServerBaseUrl) ?: defaultServerBaseUrl)
+    }
     PlatformBackHandler(enabled = true, onBack = onBack)
 
     val authLabel = when (settingsRepository?.currentAuthMode()) {
@@ -51,12 +57,27 @@ internal fun SettingsPage(
         Text(authLabel)
         OutlinedTextField(
             value = serverUrl,
-            onValueChange = { serverUrl = it },
+            onValueChange = {
+                serverUrl = it
+                settingsRepository?.setServerBaseUrl(it)
+            },
             label = { Text("服务器地址") },
             singleLine = true,
             modifier = Modifier.widthIn(max = 520.dp).fillMaxWidth(),
         )
-        Text("同步：后续接入 Ktor 服务。")
+        Row(
+            modifier = Modifier.widthIn(max = 520.dp).fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Text("动态取色", style = MaterialTheme.typography.titleMedium)
+            Switch(
+                checked = dynamicColorEnabled,
+                onCheckedChange = onDynamicColorEnabledChange,
+                enabled = settingsRepository != null,
+            )
+        }
+        Text("同步：阅读进度已接入 Ktor 服务，缺少登录 token 时会排队等待。")
         Text("本地存储：应用私有目录。")
         OutlinedButton(onClick = onLogout) {
             Text("退出登录状态")

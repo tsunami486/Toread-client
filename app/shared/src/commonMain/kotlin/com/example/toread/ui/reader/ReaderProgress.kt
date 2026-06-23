@@ -6,12 +6,23 @@ import com.example.toread.reader.BookLocator
 import com.example.toread.reader.EpubLocator
 import com.example.toread.reader.PdfLocator
 import com.example.toread.reader.TxtLocator
+import com.example.toread.progress.SaveProgressResult
+import com.example.toread.sync.ProgressSyncScheduler
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
 import kotlin.math.roundToInt
-internal fun BookLocator.toPageIndex(pageCount: Int): Int {
+internal fun BookLocator.toPageIndex(pages: List<ReaderPageSlice>): Int {
+    val pageCount = pages.size
     if (pageCount <= 1) return 0
-    return (globalProgress.coerceIn(0.0, 1.0) * (pageCount - 1)).roundToInt()
+    return when (this) {
+        is TxtLocator -> pages.pageIndexForCharOffset(charOffset)
+        is PdfLocator -> pageIndex.coerceIn(0, pageCount - 1)
+        is EpubLocator -> pages.pageIndexForEpubLocator(this)
+            ?: charOffset
+            ?.let { pages.pageIndexForCharOffset(it) }
+            ?: toProgressPageIndex(pageCount)
+    }
 }
 
 internal fun normalizePageIndex(index: Int, pageCount: Int, isDesktop: Boolean): Int {
@@ -23,37 +34,106 @@ internal fun normalizePageIndex(index: Int, pageCount: Int, isDesktop: Boolean):
 internal fun Int.pageProgress(pageCount: Int): Double =
     if (pageCount <= 1) 0.0 else toDouble() / (pageCount - 1).toDouble()
 
+private fun BookLocator.toProgressPageIndex(pageCount: Int): Int =
+    (globalProgress.coerceIn(0.0, 1.0) * (pageCount - 1)).roundToInt()
+
+private fun List<ReaderPageSlice>.pageIndexForCharOffset(charOffset: Long): Int {
+    if (isEmpty()) return 0
+    val target = charOffset.coerceIn(0L, Int.MAX_VALUE.toLong()).toInt()
+    val exactIndex = indexOfFirst { page ->
+        val hasContentRange = page.endOffset > page.startOffset
+        if (hasContentRange) {
+            target >= page.startOffset && target < page.endOffset
+        } else {
+            target == page.startOffset
+        }
+    }
+    if (exactIndex >= 0) return exactIndex
+
+    val nearestPrevious = indexOfLast { page -> page.startOffset <= target }
+    return nearestPrevious.coerceIn(0, lastIndex)
+}
+
+private fun List<ReaderPageSlice>.pageIndexForEpubLocator(locator: EpubLocator): Int? {
+    val href = locator.chapterHref.takeIf { it.isNotBlank() && it != "local-text" } ?: return null
+    val unitIndex = locator.unitIndex ?: return null
+    val textOffset = locator.textOffset ?: 0
+    val exactIndex = indexOfFirst { page ->
+        val start = page.startLocator
+        val end = page.endLocator
+        page.chapterHref == href &&
+            start.unitIndex <= unitIndex &&
+            end.unitIndex >= unitIndex &&
+            if (start.unitIndex == end.unitIndex) {
+                textOffset in start.textOffset..end.textOffset
+            } else {
+                unitIndex > start.unitIndex || textOffset >= start.textOffset
+            }
+    }
+    if (exactIndex >= 0) return exactIndex
+    return indexOfLast { page ->
+        page.chapterHref == href && page.startLocator.unitIndex <= unitIndex
+    }.takeIf { it >= 0 }
+}
+
 internal fun saveReaderProgress(
     scope: CoroutineScope,
     progressRepository: ReadingProgressRepository?,
+    progressSyncScheduler: ProgressSyncScheduler?,
+    remoteSyncPolicy: ReaderProgressRemoteSyncPolicy,
     book: BookshelfBook,
     pageIndex: Int,
     pageCount: Int,
     charOffset: Int,
+    chapterOrd: Int?,
+    startLocator: ReaderTextLocator? = null,
+    chapterHref: String? = null,
+    sourceLength: Int,
     deviceId: String,
-) {
-    val repository = progressRepository ?: return
-    scope.launch {
+    onSyncFinished: (() -> Unit)? = null,
+): Job? {
+    val repository = progressRepository ?: return null
+    return scope.launch {
         val globalProgress = pageIndex.pageProgress(pageCount)
+        val textProgress = if (sourceLength > 0) {
+            charOffset.toDouble().coerceIn(0.0, sourceLength.toDouble()) / sourceLength.toDouble()
+        } else {
+            globalProgress
+        }
         val locator = when (book.format.lowercase()) {
             "epub" -> EpubLocator(
-                chapterHref = "local-text",
-                chapterIndex = pageIndex,
+                chapterHref = startLocator?.chapterHref ?: chapterHref ?: "local-text",
+                chapterIndex = chapterOrd ?: pageIndex,
                 chapterProgress = 0.0,
-                globalProgress = globalProgress,
+                globalProgress = textProgress,
+                charOffset = charOffset.toLong(),
+                unitIndex = startLocator?.unitIndex,
+                textOffset = startLocator?.textOffset,
             )
             "pdf" -> PdfLocator(pageIndex = pageIndex, pageOffsetY = 0.0, globalProgress = globalProgress)
             else -> TxtLocator(
                 charOffset = charOffset.toLong(),
                 paragraphIndex = null,
-                globalProgress = globalProgress,
+                globalProgress = textProgress,
             )
         }
-        repository.saveLocalProgress(
+        val result = repository.saveLocalProgress(
             bookHash = book.bookHash,
             format = book.format,
             locator = locator,
             deviceId = deviceId,
         )
+        if (result is SaveProgressResult.Saved) {
+            when (remoteSyncPolicy) {
+                ReaderProgressRemoteSyncPolicy.Debounced -> progressSyncScheduler?.scheduleDebounced()
+                ReaderProgressRemoteSyncPolicy.Immediate -> progressSyncScheduler?.flushNow()?.join()
+            }
+            onSyncFinished?.invoke()
+        }
     }
+}
+
+internal enum class ReaderProgressRemoteSyncPolicy {
+    Debounced,
+    Immediate,
 }

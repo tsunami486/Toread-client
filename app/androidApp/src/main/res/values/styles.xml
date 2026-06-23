@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <style name="AppTheme" parent="@android:style/Theme.Material.Light.NoActionBar">
+        <item name="android:windowBackground">@color/startup_window_background</item>
+        <item name="android:windowSplashScreenBackground">@color/startup_window_background</item>
+        <item name="android:windowSplashScreenAnimatedIcon">@drawable/startup_window_icon_empty</item>
+        <item name="android:windowSplashScreenAnimationDuration">0</item>
+    </style>
+</resources>

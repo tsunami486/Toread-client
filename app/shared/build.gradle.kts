@@ -41,9 +41,11 @@ kotlin {
         androidMain.dependencies {
             implementation(libs.compose.uiToolingPreview)
             implementation(libs.sqldelight.androidDriver)
+            implementation(libs.ktor.clientAndroid)
         }
         desktopMain.dependencies {
             implementation(libs.sqldelight.sqliteDriver)
+            implementation(libs.ktor.clientCio)
         }
         commonMain.dependencies {
             api(project(":client:core"))
@@ -58,6 +60,9 @@ kotlin {
             implementation(libs.kotlinx.coroutinesCore)
             implementation(libs.kotlinx.serializationJson)
             implementation(libs.sqldelight.runtime)
+            implementation(libs.ktor.clientCore)
+            implementation(libs.ktor.clientContentNegotiation)
+            implementation(libs.ktor.clientSerializationKotlinxJson)
         }
         commonTest.dependencies {
             implementation(libs.kotlin.test)

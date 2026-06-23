@@ -1,5 +1,6 @@
 package com.example.toread.ui.screens
 
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -25,10 +26,12 @@ import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
+import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -38,24 +41,20 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.ImageBitmap
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.toread.library.BookshelfBook
+import com.example.toread.platform.CoverImageBytesLoader
+import com.example.toread.ui.theme.toreadColors
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
+import org.jetbrains.compose.resources.decodeToImageBitmap
 import kotlin.math.roundToInt
-
-private val BookshelfBackground = Color(0xFFFAF7FC)
-private val BookshelfPrimary = Color(0xFF6F4BB2)
-private val BookshelfCard = Color(0xFFFFFFFF)
-private val BookshelfWeakBackground = Color(0xFFF1ECF6)
-private val BookshelfText = Color(0xFF1F1B24)
-private val BookshelfSecondaryText = Color(0xFF6B6472)
-private val BookshelfBorder = Color(0xFFE2DAEA)
-private val SyncSuccess = Color(0xFF2E7D32)
-private val SyncPending = Color(0xFF8A6D1D)
-private val SyncFailed = Color(0xFFC62828)
 
 private enum class BookshelfFilter(val label: String) {
     All("全部"),
@@ -75,6 +74,7 @@ internal fun BookshelfPage(
     var query by remember { mutableStateOf("") }
     var selectedFilter by remember { mutableStateOf(BookshelfFilter.All) }
     val pendingSyncCount = books.count { it.syncStatus.isPendingSync() }
+    val failedSyncCount = books.count { it.syncStatus.normalizedSyncStatus() == "failed" }
     val continueBook = remember(books) {
         books
             .filter { it.lastReadAt != null || it.progress > 0.0 }
@@ -101,7 +101,7 @@ internal fun BookshelfPage(
     Box(
         modifier = Modifier
             .fillMaxSize()
-            .background(BookshelfBackground),
+            .background(MaterialTheme.colorScheme.background),
     ) {
         Column(
             modifier = Modifier
@@ -113,6 +113,7 @@ internal fun BookshelfPage(
             BookshelfHeader(
                 bookCount = books.size,
                 pendingSyncCount = pendingSyncCount,
+                failedSyncCount = failedSyncCount,
                 onSync = onSync,
                 onSettings = onSettings,
             )
@@ -120,10 +121,10 @@ internal fun BookshelfPage(
             Button(
                 onClick = onImport,
                 modifier = Modifier
-                    .fillMaxWidth()
-                    .height(44.dp),
-                shape = RoundedCornerShape(24.dp),
-                colors = ButtonDefaults.buttonColors(containerColor = BookshelfPrimary),
+                .fillMaxWidth()
+                .height(44.dp),
+            shape = RoundedCornerShape(24.dp),
+            colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.primary),
             ) {
                 Text("+  导入 EPUB / PDF / TXT", fontSize = 17.sp, fontWeight = FontWeight.Medium)
             }
@@ -132,7 +133,7 @@ internal fun BookshelfPage(
             }
             Text(
                 text = "全部书籍",
-                color = BookshelfText,
+                color = MaterialTheme.colorScheme.onSurface,
                 fontSize = 20.sp,
                 fontWeight = FontWeight.SemiBold,
             )
@@ -158,19 +159,25 @@ internal fun BookshelfPage(
 private fun BookshelfHeader(
     bookCount: Int,
     pendingSyncCount: Int,
+    failedSyncCount: Int,
     onSync: () -> Unit,
     onSettings: () -> Unit,
 ) {
+    val syncSummary = buildList {
+        add("$pendingSyncCount 项等待同步")
+        if (failedSyncCount > 0) add("$failedSyncCount 项同步失败")
+    }.joinToString(" · ")
+
     Row(
         modifier = Modifier.fillMaxWidth(),
         horizontalArrangement = Arrangement.SpaceBetween,
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-            Text("书架", color = BookshelfText, fontSize = 36.sp, fontWeight = FontWeight.Bold)
+            Text("书架", color = MaterialTheme.colorScheme.onSurface, fontSize = 36.sp, fontWeight = FontWeight.Bold)
             Text(
-                text = "本地书库 · $bookCount 本书 · $pendingSyncCount 项等待同步",
-                color = BookshelfSecondaryText,
+                text = "本地书库 · $bookCount 本书 · $syncSummary",
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
                 fontSize = 15.sp,
             )
         }
@@ -188,10 +195,10 @@ private fun HeaderIconButton(text: String, onClick: () -> Unit) {
         modifier = Modifier
             .size(40.dp)
             .clip(RoundedCornerShape(10.dp))
-            .background(BookshelfWeakBackground)
+            .background(MaterialTheme.colorScheme.surfaceVariant)
             .padding(horizontal = 5.dp),
     ) {
-        Text(text = text, color = BookshelfText, fontSize = 20.sp, fontWeight = FontWeight.SemiBold)
+        Text(text = text, color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 20.sp, fontWeight = FontWeight.SemiBold)
     }
 }
 
@@ -200,14 +207,14 @@ private fun BookshelfSearchBox(query: String, onQueryChange: (String) -> Unit) {
     OutlinedTextField(
         value = query,
         onValueChange = onQueryChange,
-        placeholder = { Text("搜索书名、作者或文件名", color = BookshelfSecondaryText) },
+        placeholder = { Text("搜索书名、作者或文件名", color = MaterialTheme.colorScheme.onSurfaceVariant) },
         singleLine = true,
         shape = RoundedCornerShape(24.dp),
-        leadingIcon = { Text("⌕", color = BookshelfSecondaryText, fontSize = 28.sp) },
+        leadingIcon = { Text("⌕", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 28.sp) },
         modifier = Modifier
             .widthIn(max = 640.dp)
             .fillMaxWidth()
-            .background(BookshelfCard, RoundedCornerShape(24.dp)),
+            .background(MaterialTheme.colorScheme.surface, RoundedCornerShape(24.dp)),
     )
 }
 
@@ -218,7 +225,7 @@ private fun ContinueReadingSection(book: BookshelfBook, onOpenBook: (BookshelfBo
         Card(
             modifier = Modifier.fillMaxWidth(),
             shape = RoundedCornerShape(20.dp),
-            colors = CardDefaults.cardColors(containerColor = BookshelfCard),
+            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
             elevation = CardDefaults.cardElevation(defaultElevation = 3.dp),
         ) {
             Column(
@@ -240,16 +247,16 @@ private fun ContinueReadingSection(book: BookshelfBook, onOpenBook: (BookshelfBo
                     ) {
                         Text(
                             book.title,
-                            color = BookshelfText,
+                            color = MaterialTheme.colorScheme.onSurface,
                             fontSize = 18.sp,
                             fontWeight = FontWeight.SemiBold,
                             maxLines = 2,
                             overflow = TextOverflow.Ellipsis,
                         )
-                        Text(book.metaLine(), color = BookshelfSecondaryText, fontSize = 14.sp)
-                        Text(book.progressLabel(), color = BookshelfPrimary, fontSize = 14.sp)
+                        Text(book.metaLine(), color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 14.sp)
+                        Text(book.progressLabel(), color = MaterialTheme.colorScheme.primary, fontSize = 14.sp)
                         ProgressLine(progress = book.progress)
-                        Text("上次阅读：${book.lastReadLabel()}", color = BookshelfSecondaryText, fontSize = 13.sp)
+                        Text("上次阅读：${book.lastReadLabel()}", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 13.sp)
                     }
                 }
                 Row(
@@ -273,9 +280,9 @@ private fun SectionTitle(text: String) {
             modifier = Modifier
                 .width(5.dp)
                 .height(24.dp)
-                .background(BookshelfPrimary, RoundedCornerShape(4.dp)),
+                .background(MaterialTheme.colorScheme.primary, RoundedCornerShape(4.dp)),
         )
-        Text(text, color = BookshelfText, fontSize = 20.sp, fontWeight = FontWeight.SemiBold)
+        Text(text, color = MaterialTheme.colorScheme.onSurface, fontSize = 20.sp, fontWeight = FontWeight.SemiBold)
     }
 }
 
@@ -293,15 +300,19 @@ private fun BookshelfFilters(
             Box(
                 modifier = Modifier
                     .clip(RoundedCornerShape(22.dp))
-                    .background(if (selected) BookshelfPrimary else BookshelfBackground)
-                    .border(1.dp, if (selected) BookshelfPrimary else BookshelfBorder, RoundedCornerShape(22.dp))
+                    .background(if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.background)
+                    .border(
+                        1.dp,
+                        if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outlineVariant,
+                        RoundedCornerShape(22.dp),
+                    )
                     .clickable { onSelectFilter(filter) }
                     .padding(horizontal = 20.dp, vertical = 9.dp),
                 contentAlignment = Alignment.Center,
             ) {
                 Text(
                     text = filter.label,
-                    color = if (selected) Color.White else BookshelfSecondaryText,
+                    color = if (selected) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurfaceVariant,
                     fontSize = 15.sp,
                     fontWeight = if (selected) FontWeight.Medium else FontWeight.Normal,
                 )
@@ -315,7 +326,7 @@ private fun EmptyBookshelfCard(hasBooks: Boolean, onImport: () -> Unit) {
     Card(
         modifier = Modifier.fillMaxWidth(),
         shape = RoundedCornerShape(20.dp),
-        colors = CardDefaults.cardColors(containerColor = BookshelfCard),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
     ) {
         Column(
             modifier = Modifier.padding(18.dp),
@@ -323,18 +334,18 @@ private fun EmptyBookshelfCard(hasBooks: Boolean, onImport: () -> Unit) {
         ) {
             Text(
                 if (hasBooks) "没有符合条件的书" else "还没有可阅读的书",
-                color = BookshelfText,
+                color = MaterialTheme.colorScheme.onSurface,
                 fontSize = 18.sp,
                 fontWeight = FontWeight.SemiBold,
             )
             Text(
                 if (hasBooks) "换个关键词或筛选项试试。" else "导入 EPUB、PDF 或 TXT 文件后会显示在这里。",
-                color = BookshelfSecondaryText,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
             Button(
                 onClick = onImport,
                 shape = RoundedCornerShape(24.dp),
-                colors = ButtonDefaults.buttonColors(containerColor = BookshelfPrimary),
+                colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.primary),
             ) {
                 Text("导入书籍")
             }
@@ -347,7 +358,7 @@ private fun BookCard(book: BookshelfBook, onOpenBook: (BookshelfBook) -> Unit) {
     Card(
         modifier = Modifier.fillMaxWidth(),
         shape = RoundedCornerShape(20.dp),
-        colors = CardDefaults.cardColors(containerColor = BookshelfCard),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
         elevation = CardDefaults.cardElevation(defaultElevation = 2.dp),
     ) {
         Column(
@@ -369,14 +380,14 @@ private fun BookCard(book: BookshelfBook, onOpenBook: (BookshelfBook) -> Unit) {
                 ) {
                     Text(
                         book.title,
-                        color = BookshelfText,
+                        color = MaterialTheme.colorScheme.onSurface,
                         fontSize = 17.sp,
                         fontWeight = FontWeight.SemiBold,
                         maxLines = 2,
                         overflow = TextOverflow.Ellipsis,
                     )
-                    Text(book.metaLine(), color = BookshelfSecondaryText, fontSize = 14.sp)
-                    Text(book.progressLabel(), color = BookshelfPrimary, fontSize = 14.sp)
+                    Text(book.metaLine(), color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 14.sp)
+                    Text(book.progressLabel(), color = MaterialTheme.colorScheme.primary, fontSize = 14.sp)
                     ProgressLine(progress = book.progress)
                     SyncStatusLabel(status = book.syncStatus)
                 }
@@ -398,10 +409,23 @@ private fun BookCard(book: BookshelfBook, onOpenBook: (BookshelfBook) -> Unit) {
 private fun BookCover(book: BookshelfBook) {
     val format = book.format.uppercase()
     val titleMark = book.title.firstOrNull { it.isLetterOrDigit() }?.toString() ?: format
+    val toreadColors = MaterialTheme.toreadColors
     val coverBrush = when (book.format.lowercase()) {
-        "epub" -> Brush.linearGradient(listOf(Color(0xFFD9D0EA), Color(0xFF8A6CC5)))
-        "pdf" -> Brush.linearGradient(listOf(Color(0xFFE8D7D2), Color(0xFFB56B5B)))
-        else -> Brush.linearGradient(listOf(Color(0xFFDFD7EF), Color(0xFF7D64B4)))
+        "epub" -> Brush.linearGradient(listOf(toreadColors.epubCoverStart, toreadColors.epubCoverEnd))
+        "pdf" -> Brush.linearGradient(listOf(toreadColors.pdfCoverStart, toreadColors.pdfCoverEnd))
+        else -> Brush.linearGradient(listOf(toreadColors.txtCoverStart, toreadColors.txtCoverEnd))
+    }
+    val coverLoader = remember { CoverImageBytesLoader() }
+    var coverBitmap by remember(book.coverPath) { mutableStateOf<ImageBitmap?>(null) }
+
+    LaunchedEffect(book.coverPath) {
+        coverBitmap = null
+        val coverPath = book.coverPath?.takeIf { it.isNotBlank() } ?: return@LaunchedEffect
+        coverBitmap = withContext(Dispatchers.Default) {
+            runCatching {
+                coverLoader.load(coverPath)?.decodeToImageBitmap()
+            }.getOrNull()
+        }
     }
 
     Box(
@@ -410,25 +434,35 @@ private fun BookCover(book: BookshelfBook) {
             .height(104.dp)
             .clip(RoundedCornerShape(8.dp))
             .background(coverBrush)
-            .border(1.dp, BookshelfBorder, RoundedCornerShape(8.dp)),
+            .border(1.dp, MaterialTheme.colorScheme.outlineVariant, RoundedCornerShape(8.dp)),
         contentAlignment = Alignment.Center,
     ) {
-        Column(
-            modifier = Modifier.padding(8.dp),
-            horizontalAlignment = Alignment.CenterHorizontally,
-            verticalArrangement = Arrangement.SpaceBetween,
-        ) {
-            Text(
-                text = titleMark,
-                color = Color.White,
-                fontSize = if (titleMark.length > 1) 18.sp else 34.sp,
-                fontWeight = FontWeight.Bold,
-                textAlign = TextAlign.Center,
-                maxLines = 2,
-                overflow = TextOverflow.Ellipsis,
+        val loadedCover = coverBitmap
+        if (loadedCover != null) {
+            Image(
+                bitmap = loadedCover,
+                contentDescription = "${book.title} 封面",
+                contentScale = ContentScale.Crop,
+                modifier = Modifier.fillMaxSize(),
             )
-            Spacer(modifier = Modifier.height(18.dp))
-            Text(format, color = Color.White.copy(alpha = 0.85f), fontSize = 12.sp, letterSpacing = 3.sp)
+        } else {
+            Column(
+                modifier = Modifier.padding(8.dp),
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.SpaceBetween,
+            ) {
+                Text(
+                    text = titleMark,
+                    color = Color.White,
+                    fontSize = if (titleMark.length > 1) 18.sp else 34.sp,
+                    fontWeight = FontWeight.Bold,
+                    textAlign = TextAlign.Center,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis,
+                )
+                Spacer(modifier = Modifier.height(18.dp))
+                Text(format, color = Color.White.copy(alpha = 0.85f), fontSize = 12.sp, letterSpacing = 3.sp)
+            }
         }
     }
 }
@@ -441,17 +475,17 @@ private fun ProgressLine(progress: Double) {
             .fillMaxWidth()
             .height(6.dp)
             .clip(RoundedCornerShape(4.dp)),
-        color = BookshelfPrimary,
-        trackColor = BookshelfWeakBackground,
+        color = MaterialTheme.colorScheme.primary,
+        trackColor = MaterialTheme.colorScheme.surfaceVariant,
     )
 }
 
 @Composable
 private fun SyncStatusLabel(status: String) {
     val color = when (status.normalizedSyncStatus()) {
-        "synced" -> SyncSuccess
-        "failed" -> SyncFailed
-        else -> SyncPending
+        "synced" -> MaterialTheme.toreadColors.syncSuccess
+        "failed" -> MaterialTheme.toreadColors.syncFailed
+        else -> MaterialTheme.toreadColors.syncPending
     }
     Text(text = status.displaySyncStatus(), color = color, fontSize = 14.sp, fontWeight = FontWeight.Medium)
 }
@@ -464,7 +498,7 @@ private fun ReaderActionButton(text: String, onClick: () -> Unit) {
             .height(34.dp)
             .widthIn(min = 76.dp, max = 104.dp),
         shape = RoundedCornerShape(20.dp),
-        colors = ButtonDefaults.outlinedButtonColors(contentColor = BookshelfPrimary),
+        colors = ButtonDefaults.outlinedButtonColors(contentColor = MaterialTheme.colorScheme.primary),
         contentPadding = PaddingValues(horizontal = 12.dp, vertical = 0.dp),
     ) {
         Text(text, fontSize = 13.sp, fontWeight = FontWeight.Medium, maxLines = 1)
