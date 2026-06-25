@@ -4,6 +4,7 @@ import com.example.toread.platform.SecureTokenStore
 import io.ktor.client.HttpClient
 import io.ktor.client.call.body
 import io.ktor.client.plugins.contentnegotiation.ContentNegotiation
+import io.ktor.client.request.get
 import io.ktor.client.request.header
 import io.ktor.client.request.post
 import io.ktor.client.request.setBody
@@ -42,6 +43,24 @@ class AuthClient(
             path = "/auth/refresh",
             body = RefreshRequest(refreshToken = refreshToken),
         )
+
+    suspend fun checkServerConnection(): ServerConnectionResult {
+        val baseUrl = baseUrlProvider().trim().trimEnd('/')
+        if (baseUrl.isBlank()) {
+            return ServerConnectionResult.Failure("服务器地址为空")
+        }
+
+        return runCatching {
+            val response = client.get("$baseUrl/health")
+            if (response.status.isSuccess()) {
+                ServerConnectionResult.Success
+            } else {
+                ServerConnectionResult.Failure("HTTP ${response.status.value}")
+            }
+        }.getOrElse { throwable ->
+            ServerConnectionResult.Failure(throwable.message ?: throwable::class.simpleName ?: "连接服务器失败")
+        }
+    }
 
     private suspend inline fun <reified T : Any> authenticate(
         path: String,
@@ -85,6 +104,11 @@ data class AuthSession(
 sealed interface AuthClientResult {
     data class Success(val session: AuthSession) : AuthClientResult
     data class Failure(val message: String) : AuthClientResult
+}
+
+sealed interface ServerConnectionResult {
+    data object Success : ServerConnectionResult
+    data class Failure(val message: String) : ServerConnectionResult
 }
 
 @Serializable

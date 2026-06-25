@@ -9,19 +9,36 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxScope
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.automirrored.filled.KeyboardArrowLeft
+import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
+import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.Menu
+import androidx.compose.material.icons.filled.Remove
+import androidx.compose.material.icons.outlined.DarkMode
+import androidx.compose.material.icons.outlined.Settings
+import androidx.compose.material.icons.outlined.TextFields
+import androidx.compose.material.icons.outlined.ViewColumn
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
-import androidx.compose.material3.FilledTonalButton
+import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
@@ -38,10 +55,12 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.ImageBitmap
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.layout.Layout
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.TextUnit
 import androidx.compose.ui.unit.dp
@@ -54,8 +73,16 @@ import com.example.toread.ui.theme.toreadColors
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import org.jetbrains.compose.resources.decodeToImageBitmap
-import kotlin.math.min
 import kotlin.math.roundToInt
+
+private val DesktopReaderBackground = Color(0xFF0F1214)
+private val DesktopReaderToolbarText = Color(0xFFAEB7BF)
+private val DesktopReaderControlBackground = Color(0xFF1A1F23)
+private val DesktopReaderPageBackground = Color(0xFF1B2023)
+private val DesktopReaderPageText = Color(0xFFE4EAF0)
+private val DesktopReaderDivider = Color(0xFF2A3136)
+private val DesktopReaderMutedText = Color(0xFF9AA5AE)
+
 @Composable
 internal fun DesktopReaderLayout(
     book: BookshelfBook,
@@ -70,75 +97,223 @@ internal fun DesktopReaderLayout(
     Column(
         modifier = Modifier
             .fillMaxSize()
-            .padding(horizontal = 72.dp, vertical = 24.dp),
-        verticalArrangement = Arrangement.spacedBy(14.dp),
+            .background(DesktopReaderBackground)
+            .padding(start = 72.dp, top = 24.dp, end = 72.dp, bottom = 8.dp),
+        verticalArrangement = Arrangement.spacedBy(10.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
     ) {
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            TextButton(onClick = onBack) {
-                Text("‹ ${book.title}", color = MaterialTheme.colorScheme.onSurfaceVariant)
-            }
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
-                FilledTonalButton(onClick = onPrevious, enabled = pageIndex > 0) {
-                    Text("上一页")
-                }
-                FilledTonalButton(onClick = onNext, enabled = pageIndex + 2 <= pages.lastIndex) {
-                    Text("下一页")
-                }
-            }
-        }
-
-        Card(
+        DesktopReaderTopBar(bookTitle = book.title, onBack = onBack)
+        DesktopReaderSpread(
+            bookTitle = book.title,
+            sourceText = sourceText,
+            pages = pages,
+            pageIndex = pageIndex,
+            progress = progress,
+            onPrevious = onPrevious,
+            onNext = onNext,
             modifier = Modifier
                 .weight(1f)
                 .fillMaxHeight()
                 .aspectRatio(DesktopSpreadAspectRatio)
                 .align(Alignment.CenterHorizontally),
+        )
+        Spacer(modifier = Modifier.height(12.dp))
+    }
+}
+
+@Composable
+private fun DesktopReaderTopBar(
+    bookTitle: String,
+    onBack: () -> Unit,
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .widthIn(max = 1240.dp)
+            .height(36.dp),
+        horizontalArrangement = Arrangement.SpaceBetween,
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        TextButton(onClick = onBack) {
+            Icon(
+                imageVector = Icons.AutoMirrored.Filled.ArrowBack,
+                contentDescription = "返回书架",
+                tint = DesktopReaderToolbarText,
+                modifier = Modifier.size(18.dp),
+            )
+            Text(
+                text = bookTitle,
+                color = DesktopReaderToolbarText,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+        }
+        Row(
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            DesktopReaderToolbarButton(label = "目录", imageVector = Icons.Default.Menu)
+            DesktopReaderToolbarButton(label = "单页/双页", imageVector = Icons.Outlined.ViewColumn)
+            DesktopReaderToolbarButton(label = "夜间模式", imageVector = Icons.Outlined.DarkMode)
+            DesktopReaderToolbarButton(label = "字体", imageVector = Icons.Outlined.TextFields)
+            DesktopReaderToolbarButton(label = "字号减小", imageVector = Icons.Default.Remove)
+            DesktopReaderToolbarButton(label = "字号增大", imageVector = Icons.Default.Add)
+        }
+    }
+}
+
+@Composable
+private fun DesktopReaderToolbarButton(
+    label: String,
+    imageVector: ImageVector,
+    onClick: () -> Unit = {},
+) {
+    IconButton(
+        onClick = onClick,
+        modifier = Modifier
+            .size(34.dp)
+            .background(DesktopReaderControlBackground, RoundedCornerShape(50)),
+    ) {
+        Icon(
+            imageVector = imageVector,
+            contentDescription = label,
+            tint = DesktopReaderToolbarText,
+            modifier = Modifier.size(18.dp),
+        )
+    }
+}
+
+@Composable
+private fun DesktopReaderSpread(
+    bookTitle: String,
+    sourceText: String,
+    pages: List<ReaderPageSlice>,
+    pageIndex: Int,
+    progress: Double,
+    onPrevious: () -> Unit,
+    onNext: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val typography = DesktopReaderTypography
+    Card(
+        modifier = modifier,
+        shape = RoundedCornerShape(8.dp),
+        colors = CardDefaults.cardColors(containerColor = DesktopReaderPageBackground),
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(start = 32.dp, top = 30.dp, end = 32.dp, bottom = 10.dp),
         ) {
             Row(
                 modifier = Modifier
-                    .fillMaxSize()
-                    .background(MaterialTheme.toreadColors.readerPage)
-                    .padding(horizontal = 34.dp, vertical = 30.dp),
+                    .fillMaxWidth()
+                    .weight(1f),
                 horizontalArrangement = Arrangement.spacedBy(30.dp),
             ) {
                 ReaderTextPage(
-                    page = pages.getOrNull(pageIndex) ?: ReaderPageSlice(book.title, 0, 0),
+                    page = pages.getOrNull(pageIndex) ?: ReaderPageSlice(bookTitle, 0, 0),
                     sourceText = sourceText,
                     modifier = Modifier
                         .weight(1f)
                         .fillMaxHeight(),
-                    textColor = MaterialTheme.colorScheme.onSurface,
-                    bodyFontSize = 22.sp,
-                    bodyLineHeight = 34.sp,
+                    textColor = DesktopReaderPageText,
+                    bodyFontSize = typography.bodyFontSize,
+                    bodyLineHeight = typography.bodyLineHeight,
+                    bodyFontWeight = FontWeight.Medium,
+                    bodyLetterSpacing = typography.bodyLetterSpacing,
+                    bodyTextAlign = TextAlign.Start,
                 )
                 Box(
                     modifier = Modifier
                         .width(1.dp)
                         .fillMaxHeight()
-                        .background(MaterialTheme.toreadColors.readerDivider),
+                        .background(DesktopReaderDivider),
                 )
                 ReaderTextPage(
-                    page = pages.getOrNull(pageIndex + 1) ?: ReaderPageSlice(book.title, 0, 0),
+                    page = pages.getOrNull(pageIndex + 1) ?: ReaderPageSlice(bookTitle, 0, 0),
                     sourceText = sourceText,
                     modifier = Modifier
                         .weight(1f)
                         .fillMaxHeight(),
-                    textColor = MaterialTheme.colorScheme.onSurface,
-                    bodyFontSize = 22.sp,
-                    bodyLineHeight = 34.sp,
+                    textColor = DesktopReaderPageText,
+                    bodyFontSize = typography.bodyFontSize,
+                    bodyLineHeight = typography.bodyLineHeight,
+                    bodyFontWeight = FontWeight.Medium,
+                    bodyLetterSpacing = typography.bodyLetterSpacing,
+                    bodyTextAlign = TextAlign.Start,
                 )
             }
-        }
-
-        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-            Text("第 ${pageIndex + 1}-${min(pageIndex + 2, pages.size)} 页", color = MaterialTheme.colorScheme.onSurfaceVariant)
-            Text("${(progress * 100).roundToInt()}%", color = MaterialTheme.colorScheme.onSurfaceVariant)
+            DesktopReaderBottomBar(
+                progress = progress,
+                canPrevious = pageIndex > 0,
+                canNext = pageIndex + 2 <= pages.lastIndex,
+                onPrevious = onPrevious,
+                onNext = onNext,
+            )
         }
     }
+}
+
+@Composable
+private fun DesktopReaderBottomBar(
+    progress: Double,
+    canPrevious: Boolean,
+    canNext: Boolean,
+    onPrevious: () -> Unit,
+    onNext: () -> Unit,
+) {
+    Box(
+        modifier = Modifier
+            .fillMaxWidth()
+            .height(38.dp),
+    ) {
+        OutlinedButton(
+            onClick = onPrevious,
+            enabled = canPrevious,
+            colors = ButtonDefaults.outlinedButtonColors(
+                contentColor = DesktopReaderToolbarText,
+                disabledContentColor = DesktopReaderMutedText.copy(alpha = 0.45f),
+            ),
+            modifier = Modifier.align(Alignment.CenterStart),
+        ) {
+            Icon(
+                imageVector = Icons.AutoMirrored.Filled.KeyboardArrowLeft,
+                contentDescription = null,
+                modifier = Modifier.size(16.dp),
+            )
+            Text("上一页")
+        }
+        Text(
+            text = progress.toReaderPercentText(),
+            color = DesktopReaderMutedText,
+            style = MaterialTheme.typography.labelMedium,
+            modifier = Modifier.align(Alignment.Center),
+        )
+        OutlinedButton(
+            onClick = onNext,
+            enabled = canNext,
+            colors = ButtonDefaults.outlinedButtonColors(
+                contentColor = DesktopReaderToolbarText,
+                disabledContentColor = DesktopReaderMutedText.copy(alpha = 0.45f),
+            ),
+            modifier = Modifier.align(Alignment.CenterEnd),
+        ) {
+            Text("下一页")
+            Icon(
+                imageVector = Icons.AutoMirrored.Filled.KeyboardArrowRight,
+                contentDescription = null,
+                modifier = Modifier.size(16.dp),
+            )
+        }
+    }
+}
+
+private fun Double.toReaderPercentText(): String {
+    val scaled = (coerceIn(0.0, 1.0) * 10000).roundToInt()
+    val whole = scaled / 100
+    val fraction = (scaled % 100).toString().padStart(2, '0')
+    return "$whole.$fraction%"
 }
 
 @Composable
@@ -155,6 +330,7 @@ internal fun AndroidReaderLayout(
     onGoToPage: (Int) -> Unit,
     onToggleControls: () -> Unit,
 ) {
+    val typography = AndroidReaderTypography
     val systemBarInsets = rememberSystemBarInsets()
     val topInset = systemBarInsets.top
     val bottomInset = systemBarInsets.bottom
@@ -180,10 +356,11 @@ internal fun AndroidReaderLayout(
                     top = readerTopPadding,
                     end = 24.dp,
                     bottom = readerBottomPadding,
-                ),
+            ),
             textColor = MaterialTheme.colorScheme.onBackground,
-            bodyFontSize = 20.sp,
-            bodyLineHeight = 25.sp,
+            bodyFontSize = typography.bodyFontSize,
+            bodyLineHeight = typography.bodyLineHeight,
+            bodyLetterSpacing = typography.bodyLetterSpacing,
         )
 
         Row(modifier = Modifier.fillMaxSize()) {
@@ -258,7 +435,10 @@ private fun AndroidReaderTopBar(book: BookshelfBook, onBack: () -> Unit) {
         verticalAlignment = Alignment.CenterVertically,
     ) {
         TextButton(onClick = onBack) {
-            Text("‹")
+            Icon(
+                imageVector = Icons.AutoMirrored.Filled.ArrowBack,
+                contentDescription = "返回书架",
+            )
         }
         Text(
             book.title,
@@ -297,11 +477,13 @@ private fun BoxScope.AndroidReaderBottomPanel(
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 TextButton(onClick = onPrevious, enabled = canPrevious) {
+                    Icon(imageVector = Icons.AutoMirrored.Filled.KeyboardArrowLeft, contentDescription = null)
                     Text("上一页")
                 }
                 Text("${(progress * 100).roundToInt()}%")
                 TextButton(onClick = onNext, enabled = canNext) {
                     Text("下一页")
+                    Icon(imageVector = Icons.AutoMirrored.Filled.KeyboardArrowRight, contentDescription = null)
                 }
             }
             LinearProgressIndicator(
@@ -313,22 +495,27 @@ private fun BoxScope.AndroidReaderBottomPanel(
                 horizontalArrangement = Arrangement.SpaceEvenly,
                 verticalAlignment = Alignment.CenterVertically,
             ) {
-                ReaderPanelButton(label = "目录", icon = "☰", onClick = onOpenChapterList)
-                ReaderPanelButton(label = "夜间", icon = "☾")
-                ReaderPanelButton(label = "设置", icon = "⚙")
+                ReaderPanelButton(label = "目录", imageVector = Icons.Default.Menu, onClick = onOpenChapterList)
+                ReaderPanelButton(label = "夜间", imageVector = Icons.Outlined.DarkMode)
+                ReaderPanelButton(label = "设置", imageVector = Icons.Outlined.Settings)
             }
         }
     }
 }
 
 @Composable
-private fun ReaderPanelButton(label: String, icon: String, onClick: () -> Unit = {}) {
+private fun ReaderPanelButton(label: String, imageVector: ImageVector, onClick: () -> Unit = {}) {
     Column(
         modifier = Modifier.clickable(onClick = onClick),
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.spacedBy(4.dp),
     ) {
-        Text(icon, fontSize = 28.sp)
+        Icon(
+            imageVector = imageVector,
+            contentDescription = label,
+            modifier = Modifier.height(28.dp),
+            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
         Text(label, style = MaterialTheme.typography.labelMedium)
     }
 }
@@ -442,6 +629,9 @@ private fun ReaderTextPage(
     textColor: Color,
     bodyFontSize: TextUnit,
     bodyLineHeight: TextUnit,
+    bodyFontWeight: FontWeight = FontWeight.Normal,
+    bodyLetterSpacing: TextUnit = 0.sp,
+    bodyTextAlign: TextAlign = TextAlign.Start,
 ) {
     val fallbackLine = page.lines.ifEmpty {
         listOf(
@@ -504,6 +694,9 @@ private fun ReaderTextPage(
                                 textColor = textColor,
                                 bodyFontSize = bodyFontSize,
                                 bodyLineHeight = bodyLineHeight,
+                                bodyFontWeight = bodyFontWeight,
+                                bodyLetterSpacing = bodyLetterSpacing,
+                                bodyTextAlign = bodyTextAlign,
                                 lineHeight = renderItem.heightDp,
                             )
                         }
@@ -633,6 +826,9 @@ private fun ReaderTextLine(
     textColor: Color,
     bodyFontSize: TextUnit,
     bodyLineHeight: TextUnit,
+    bodyFontWeight: FontWeight,
+    bodyLetterSpacing: TextUnit,
+    bodyTextAlign: TextAlign,
     lineHeight: androidx.compose.ui.unit.Dp,
 ) {
     val density = LocalDensity.current
@@ -641,7 +837,7 @@ private fun ReaderTextLine(
     val canJustify = !isChapterTitle && shouldJustify && justifyTokens.size > 1
     val displayFontSize = if (isChapterTitle) bodyFontSize * 1.35f else bodyFontSize
     val displayLineHeight = if (isChapterTitle) bodyLineHeight * 1.35f else bodyLineHeight
-    val displayFontWeight = if (isChapterTitle) FontWeight.Bold else FontWeight.Normal
+    val displayFontWeight = if (isChapterTitle) FontWeight.Bold else bodyFontWeight
     if (canJustify) {
         ReaderJustifiedLine(
             tokens = justifyTokens,
@@ -650,6 +846,8 @@ private fun ReaderTextLine(
             textColor = textColor,
             bodyFontSize = bodyFontSize,
             bodyLineHeight = bodyLineHeight,
+            bodyFontWeight = bodyFontWeight,
+            bodyLetterSpacing = bodyLetterSpacing,
             lineHeight = lineHeight,
         )
     } else {
@@ -663,7 +861,8 @@ private fun ReaderTextLine(
                 fontSize = displayFontSize,
                 lineHeight = displayLineHeight,
                 fontWeight = displayFontWeight,
-                letterSpacing = 0.sp,
+                letterSpacing = bodyLetterSpacing,
+                textAlign = bodyTextAlign,
                 modifier = Modifier.padding(start = indent),
                 maxLines = 1,
                 softWrap = false,
@@ -681,6 +880,8 @@ private fun ReaderJustifiedLine(
     textColor: Color,
     bodyFontSize: TextUnit,
     bodyLineHeight: TextUnit,
+    bodyFontWeight: FontWeight,
+    bodyLetterSpacing: TextUnit,
     lineHeight: androidx.compose.ui.unit.Dp,
 ) {
     Layout(
@@ -692,7 +893,8 @@ private fun ReaderJustifiedLine(
                     color = textColor,
                     fontSize = bodyFontSize,
                     lineHeight = bodyLineHeight,
-                    letterSpacing = 0.sp,
+                    fontWeight = bodyFontWeight,
+                    letterSpacing = bodyLetterSpacing,
                     maxLines = 1,
                     softWrap = false,
                     overflow = TextOverflow.Clip,

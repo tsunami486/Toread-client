@@ -1,4 +1,6 @@
+import org.gradle.api.tasks.Exec
 import org.jetbrains.kotlin.gradle.dsl.JvmTarget
+import java.util.Properties
 
 plugins {
     alias(libs.plugins.androidApplication)
@@ -46,4 +48,43 @@ android {
         sourceCompatibility = JavaVersion.VERSION_11
         targetCompatibility = JavaVersion.VERSION_11
     }
+}
+
+tasks.register<Exec>("runAndroidDebug") {
+    group = "application"
+    description = "Installs and launches the Toread Android debug app on a connected device or emulator."
+    dependsOn("installDebug")
+
+    doFirst {
+        val adbName = if (System.getProperty("os.name").startsWith("Windows", ignoreCase = true)) {
+            "adb.exe"
+        } else {
+            "adb"
+        }
+        val adbExecutable = androidSdkDirectory().resolve("platform-tools").resolve(adbName)
+        commandLine(
+            adbExecutable.absolutePath,
+            "shell",
+            "am",
+            "start",
+            "-n",
+            "${android.defaultConfig.applicationId}/.MainActivity",
+        )
+    }
+}
+
+fun androidSdkDirectory(): File {
+    val localPropertiesFile = rootProject.file("local.properties")
+    val localSdkDir = if (localPropertiesFile.isFile) {
+        val properties = Properties()
+        localPropertiesFile.inputStream().use(properties::load)
+        properties.getProperty("sdk.dir")
+    } else {
+        null
+    }
+    val sdkDir = localSdkDir
+        ?: System.getenv("ANDROID_HOME")
+        ?: System.getenv("ANDROID_SDK_ROOT")
+        ?: error("Android SDK not found. Set sdk.dir in local.properties or ANDROID_HOME/ANDROID_SDK_ROOT.")
+    return file(sdkDir)
 }

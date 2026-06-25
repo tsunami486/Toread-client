@@ -13,7 +13,6 @@ import androidx.compose.ui.unit.Constraints
 import androidx.compose.ui.unit.Density
 import androidx.compose.ui.unit.TextUnit
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
 import com.example.toread.reader.EpubImageResource
 import com.example.toread.reader.ReaderContentBlock
 import com.example.toread.reader.ReaderDocument
@@ -207,8 +206,9 @@ internal data class ReaderPaginationSpec(
     val fontPx: Float,
     val lineHeightPx: Float,
     val linesPerPage: Int,
-    val bodyFontSize: TextUnit = 20.sp,
-    val bodyLineHeight: TextUnit = 32.sp,
+    val bodyFontSize: TextUnit = AndroidReaderTypography.bodyFontSize,
+    val bodyLineHeight: TextUnit = AndroidReaderTypography.bodyLineHeight,
+    val bodyLetterSpacing: TextUnit = AndroidReaderTypography.bodyLetterSpacing,
     val density: Density? = null,
     val fontFamilyResolver: FontFamily.Resolver? = null,
     val chapterTitleFontPx: Float = fontPx * 1.35f,
@@ -242,10 +242,11 @@ internal fun rememberReaderPaginationSpec(
         fontFamilyResolver,
     ) {
         val fallbackTitle = title.ifBlank { "正文" }
-        val bodyFontSize = if (isAndroid) 20.sp else 22.sp
-        val bodyLineHeight = if (isAndroid) 25.sp else 34.sp
-        val chapterTitleFontSize = if (isAndroid) 27.sp else 30.sp
-        val chapterTitleLineHeight = if (isAndroid) 36.sp else 44.sp
+        val typography = if (isAndroid) AndroidReaderTypography else DesktopReaderTypography
+        val bodyFontSize = typography.bodyFontSize
+        val bodyLineHeight = typography.bodyLineHeight
+        val chapterTitleFontSize = typography.chapterTitleFontSize
+        val chapterTitleLineHeight = typography.chapterTitleLineHeight
         val bodyWidthPx: Int
         val bodyHeightPx: Int
         if (isDesktop) {
@@ -287,6 +288,7 @@ internal fun rememberReaderPaginationSpec(
             linesPerPage = linesPerPage,
             bodyFontSize = bodyFontSize,
             bodyLineHeight = bodyLineHeight,
+            bodyLetterSpacing = typography.bodyLetterSpacing,
             density = density,
             fontFamilyResolver = fontFamilyResolver,
             chapterTitleFontPx = chapterTitleFontPx,
@@ -1226,7 +1228,7 @@ private fun Char.measureForReaderWithParagraph(spec: ReaderPaginationSpec): Read
         val style = TextStyle(
             fontSize = spec.bodyFontSize,
             lineHeight = spec.bodyLineHeight,
-            letterSpacing = 0.sp,
+            letterSpacing = spec.bodyLetterSpacing,
         )
         val intrinsics = ParagraphIntrinsics(
             text = text,
@@ -1268,7 +1270,7 @@ private fun Char.measureSentenceEndingPunctuationForReader(
         val style = TextStyle(
             fontSize = spec.bodyFontSize,
             lineHeight = spec.bodyLineHeight,
-            letterSpacing = 0.sp,
+            letterSpacing = spec.bodyLetterSpacing,
         )
         val intrinsics = ParagraphIntrinsics(
             text = toString(),

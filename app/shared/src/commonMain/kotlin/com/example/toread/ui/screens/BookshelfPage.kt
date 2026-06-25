@@ -20,10 +20,17 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material.icons.outlined.Search
+import androidx.compose.material.icons.outlined.Settings
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
@@ -42,6 +49,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.ImageBitmap
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
@@ -70,6 +78,7 @@ internal fun BookshelfPage(
     onOpenBook: (BookshelfBook) -> Unit,
     onSettings: () -> Unit,
     onSync: () -> Unit = {},
+    isRefreshing: Boolean = false,
 ) {
     var query by remember { mutableStateOf("") }
     var selectedFilter by remember { mutableStateOf(BookshelfFilter.All) }
@@ -116,6 +125,7 @@ internal fun BookshelfPage(
                 failedSyncCount = failedSyncCount,
                 onSync = onSync,
                 onSettings = onSettings,
+                isRefreshing = isRefreshing,
             )
             BookshelfSearchBox(query = query, onQueryChange = { query = it })
             Button(
@@ -126,7 +136,13 @@ internal fun BookshelfPage(
             shape = RoundedCornerShape(24.dp),
             colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.primary),
             ) {
-                Text("+  导入 EPUB / PDF / TXT", fontSize = 17.sp, fontWeight = FontWeight.Medium)
+                Icon(
+                    imageVector = Icons.Default.Add,
+                    contentDescription = null,
+                    modifier = Modifier.size(20.dp),
+                )
+                Spacer(modifier = Modifier.width(8.dp))
+                Text("导入 EPUB / PDF / TXT", fontSize = 17.sp, fontWeight = FontWeight.Medium)
             }
             continueBook?.let { book ->
                 ContinueReadingSection(book = book, onOpenBook = onOpenBook)
@@ -162,6 +178,7 @@ private fun BookshelfHeader(
     failedSyncCount: Int,
     onSync: () -> Unit,
     onSettings: () -> Unit,
+    isRefreshing: Boolean,
 ) {
     val syncSummary = buildList {
         add("$pendingSyncCount 项等待同步")
@@ -182,23 +199,60 @@ private fun BookshelfHeader(
             )
         }
         Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-            HeaderIconButton(text = "↻", onClick = onSync)
-            HeaderIconButton(text = "⚙", onClick = onSettings)
+            RefreshHeaderIconButton(
+                isRefreshing = isRefreshing,
+                onClick = onSync,
+            )
+            HeaderIconButton(
+                imageVector = Icons.Outlined.Settings,
+                contentDescription = "设置",
+                onClick = onSettings,
+            )
         }
     }
 }
 
 @Composable
-private fun HeaderIconButton(text: String, onClick: () -> Unit) {
+private fun RefreshHeaderIconButton(
+    isRefreshing: Boolean,
+    onClick: () -> Unit,
+) {
+    IconButton(
+        enabled = !isRefreshing,
+        onClick = onClick,
+        modifier = Modifier.size(40.dp),
+    ) {
+        if (isRefreshing) {
+            CircularProgressIndicator(
+                modifier = Modifier.size(22.dp),
+                strokeWidth = 2.dp,
+                color = MaterialTheme.colorScheme.primary,
+            )
+        } else {
+            Icon(
+                imageVector = Icons.Default.Refresh,
+                contentDescription = "刷新",
+                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+    }
+}
+
+@Composable
+private fun HeaderIconButton(
+    imageVector: ImageVector,
+    contentDescription: String,
+    onClick: () -> Unit,
+) {
     IconButton(
         onClick = onClick,
-        modifier = Modifier
-            .size(40.dp)
-            .clip(RoundedCornerShape(10.dp))
-            .background(MaterialTheme.colorScheme.surfaceVariant)
-            .padding(horizontal = 5.dp),
+        modifier = Modifier.size(40.dp),
     ) {
-        Text(text = text, color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 20.sp, fontWeight = FontWeight.SemiBold)
+        Icon(
+            imageVector = imageVector,
+            contentDescription = contentDescription,
+            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
     }
 }
 
@@ -210,7 +264,13 @@ private fun BookshelfSearchBox(query: String, onQueryChange: (String) -> Unit) {
         placeholder = { Text("搜索书名、作者或文件名", color = MaterialTheme.colorScheme.onSurfaceVariant) },
         singleLine = true,
         shape = RoundedCornerShape(24.dp),
-        leadingIcon = { Text("⌕", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 28.sp) },
+        leadingIcon = {
+            Icon(
+                imageVector = Icons.Outlined.Search,
+                contentDescription = "搜索",
+                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        },
         modifier = Modifier
             .widthIn(max = 640.dp)
             .fillMaxWidth()

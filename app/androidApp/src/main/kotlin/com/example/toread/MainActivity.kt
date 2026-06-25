@@ -68,9 +68,7 @@ class MainActivity : ComponentActivity() {
             },
         )
 
-        setContent {
-            App()
-        }
+        runToreadAndroidApp()
     }
 
     override fun onStop() {
@@ -124,6 +122,12 @@ class MainActivity : ComponentActivity() {
         val displayName: String?,
         val sizeBytes: Long?,
     )
+
+    private fun runToreadAndroidApp() {
+        setContent {
+            App()
+        }
+    }
 }
 
 @Preview
