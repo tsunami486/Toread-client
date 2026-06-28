@@ -25,6 +25,7 @@ import com.example.toread.auth.AuthClient
 import com.example.toread.auth.AuthClientResult
 import com.example.toread.settings.LocalSettingsRepository
 import com.example.toread.ui.components.ScreenColumn
+import com.example.toread.ui.text.ToreadStrings
 import kotlinx.coroutines.launch
 
 @Composable
@@ -43,25 +44,25 @@ internal fun AuthPage(
 
     ScreenColumn {
         Text(
-            text = if (isRegister) "注册 Toread" else "登录 Toread",
+            text = if (isRegister) ToreadStrings.RegisterTitle else ToreadStrings.LoginTitle,
             style = MaterialTheme.typography.headlineMedium,
             fontWeight = FontWeight.SemiBold,
         )
-        Text("Toread 是导入型阅读器，只读取你主动选择的本地 EPUB、PDF 和 TXT 文件。")
+        Text(ToreadStrings.AuthDescription)
         authError?.let {
             Text(it, color = MaterialTheme.colorScheme.error)
         }
         OutlinedTextField(
             value = email,
             onValueChange = { email = it },
-            label = { Text("邮箱") },
+            label = { Text(ToreadStrings.EmailLabel) },
             singleLine = true,
             modifier = Modifier.widthIn(max = 420.dp).fillMaxWidth(),
         )
         OutlinedTextField(
             value = password,
             onValueChange = { password = it },
-            label = { Text("密码") },
+            label = { Text(ToreadStrings.PasswordLabel) },
             singleLine = true,
             modifier = Modifier.widthIn(max = 420.dp).fillMaxWidth(),
         )
@@ -71,7 +72,7 @@ internal fun AuthPage(
                 onClick = {
                     val trimmedEmail = email.trim()
                     if (trimmedEmail.isBlank() || password.isBlank()) {
-                        authError = "请输入邮箱和密码。"
+                        authError = ToreadStrings.EmailPasswordRequired
                         return@Button
                     }
 
@@ -93,7 +94,7 @@ internal fun AuthPage(
                                 authError = result.message
                             }
                             null -> {
-                                authError = "认证服务未初始化。"
+                                authError = ToreadStrings.AuthServiceUnavailable
                             }
                         }
                         isSubmitting = false
@@ -103,7 +104,7 @@ internal fun AuthPage(
                 if (isSubmitting) {
                     CircularProgressIndicator(modifier = Modifier.size(18.dp))
                 } else {
-                    Text(if (isRegister) "注册并进入" else "登录")
+                    Text(if (isRegister) ToreadStrings.RegisterAndEnter else ToreadStrings.LoginAction)
                 }
             }
             OutlinedButton(
@@ -113,7 +114,7 @@ internal fun AuthPage(
                     isRegister = !isRegister
                 },
             ) {
-                Text(if (isRegister) "去登录" else "去注册")
+                Text(if (isRegister) ToreadStrings.GoLogin else ToreadStrings.GoRegister)
             }
             TextButton(
                 enabled = settingsRepository != null && !isSubmitting,
@@ -121,7 +122,7 @@ internal fun AuthPage(
                     onGuestMode()
                 },
             ) {
-                Text("游客进入")
+                Text(ToreadStrings.GuestMode)
             }
         }
     }

@@ -37,6 +37,14 @@ class LocalSettingsRepository(
             ?.toBooleanStrictOrNull()
             ?: false
 
+    fun autoSyncEnabled(): Boolean =
+        database.toreadDatabaseQueries
+            .getSetting(AutoSyncKey)
+            .executeAsOneOrNull()
+            ?.value_
+            ?.toBooleanStrictOrNull()
+            ?: true
+
     fun serverBaseUrl(defaultValue: String): String =
         database.toreadDatabaseQueries
             .getSetting(ServerBaseUrlKey)
@@ -51,6 +59,10 @@ class LocalSettingsRepository(
 
     fun setDynamicColorEnabled(enabled: Boolean) {
         saveSetting(DynamicColorKey, enabled.toString())
+    }
+
+    fun setAutoSyncEnabled(enabled: Boolean) {
+        saveSetting(AutoSyncKey, enabled.toString())
     }
 
     fun setLoggedIn(email: String?) {
@@ -90,6 +102,7 @@ class LocalSettingsRepository(
         const val UserEmailKey = "user_email"
         const val RefreshTokenKey = "refresh_token"
         const val DynamicColorKey = "dynamic_color_enabled"
+        const val AutoSyncKey = "auto_sync_enabled"
         const val ServerBaseUrlKey = "server_base_url"
     }
 }

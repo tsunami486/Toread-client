@@ -48,7 +48,6 @@ kotlin {
             implementation(libs.ktor.clientCio)
         }
         commonMain.dependencies {
-            api(project(":client:core"))
             implementation(libs.compose.runtime)
             implementation(libs.compose.foundation)
             implementation(libs.compose.material3)

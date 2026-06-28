@@ -24,24 +24,25 @@ import com.example.toread.importing.BookImportResult
 import com.example.toread.importing.BookImportService
 import com.example.toread.platform.PlatformBackHandler
 import com.example.toread.ui.components.ScreenColumn
+import com.example.toread.ui.text.ToreadStrings
 import kotlinx.coroutines.launch
 
 @Composable
 internal fun ImportPage(importService: BookImportService?, onImported: () -> Unit, onBack: () -> Unit) {
     val scope = rememberCoroutineScope()
-    var status by remember { mutableStateOf("等待选择本地文件。") }
+    var status by remember { mutableStateOf(ToreadStrings.ImportWaiting) }
 
     PlatformBackHandler(enabled = true, onBack = onBack)
 
     ScreenColumn {
-        Text("导入书籍", style = MaterialTheme.typography.headlineMedium, fontWeight = FontWeight.SemiBold)
-        Text("支持 EPUB、PDF、TXT。")
+        Text(ToreadStrings.ImportTitle, style = MaterialTheme.typography.headlineMedium, fontWeight = FontWeight.SemiBold)
+        Text(ToreadStrings.SupportedImportFormats)
         Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
             Button(
                 enabled = importService != null,
                 onClick = {
                     val service = importService ?: return@Button
-                    status = "正在打开文件选择器..."
+                    status = ToreadStrings.OpeningFilePicker
                     scope.launch {
                         status = runCatching { service.importSelectedFiles() }
                             .fold(
@@ -49,15 +50,15 @@ internal fun ImportPage(importService: BookImportService?, onImported: () -> Uni
                                     onImported()
                                     results.toImportStatus()
                                 },
-                                onFailure = { error -> "导入失败：${error.message ?: "未知错误"}" },
+                                onFailure = { error -> ToreadStrings.importFailed(error.message) },
                             )
                     }
                 },
             ) {
-                Text("选择本地文件")
+                Text(ToreadStrings.ChooseLocalFile)
             }
             OutlinedButton(onClick = onBack) {
-                Text("返回书架")
+                Text(ToreadStrings.BackToBookshelf)
             }
         }
         Card(modifier = Modifier.widthIn(max = 640.dp).fillMaxWidth()) {
@@ -65,7 +66,7 @@ internal fun ImportPage(importService: BookImportService?, onImported: () -> Uni
                 modifier = Modifier.padding(18.dp),
                 verticalArrangement = Arrangement.spacedBy(8.dp),
             ) {
-                Text("导入状态", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Medium)
+                Text(ToreadStrings.ImportStatusTitle, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Medium)
                 Text(status)
             }
         }
@@ -73,16 +74,14 @@ internal fun ImportPage(importService: BookImportService?, onImported: () -> Uni
 }
 
 private fun List<BookImportResult>.toImportStatus(): String {
-    if (isEmpty()) return "没有选择文件。"
+    if (isEmpty()) return ToreadStrings.NoFileSelected
 
     val imported = count { it is BookImportResult.Imported }
     val duplicates = count { it is BookImportResult.Duplicate }
     val failed = filterIsInstance<BookImportResult.Failed>()
     return buildString {
-        append("导入成功：$imported")
-        if (duplicates > 0) append("，已在书架中：$duplicates")
+        append(ToreadStrings.importedSummary(imported, duplicates, failed.size))
         if (failed.isNotEmpty()) {
-            append("，失败：${failed.size}。")
             append(failed.joinToString { "${it.fileName}：${it.reason}" })
         }
     }

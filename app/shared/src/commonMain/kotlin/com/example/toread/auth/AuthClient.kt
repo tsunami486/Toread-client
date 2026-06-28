@@ -2,6 +2,7 @@ package com.example.toread.auth
 
 import com.example.toread.platform.SecureTokenStore
 import io.ktor.client.HttpClient
+import io.ktor.client.plugins.HttpTimeout
 import io.ktor.client.call.body
 import io.ktor.client.plugins.contentnegotiation.ContentNegotiation
 import io.ktor.client.request.get
@@ -21,6 +22,11 @@ class AuthClient(
     private val baseUrlProvider: () -> String,
     private val tokenStore: SecureTokenStore,
     private val client: HttpClient = HttpClient {
+        install(HttpTimeout) {
+            connectTimeoutMillis = AuthHttpTimeoutMillis
+            requestTimeoutMillis = AuthHttpTimeoutMillis
+            socketTimeoutMillis = AuthHttpTimeoutMillis
+        }
         install(ContentNegotiation) {
             json(AuthHttpJson)
         }
@@ -77,7 +83,11 @@ class AuthClient(
                 setBody(body)
             }
             if (!response.status.isSuccess()) {
-                return AuthClientResult.Failure(response.errorMessage())
+                val error = response.errorDetails()
+                return AuthClientResult.Failure(
+                    message = error.message,
+                    error = error.error,
+                )
             }
 
             val auth = response.body<AuthResponse>()
@@ -103,7 +113,10 @@ data class AuthSession(
 
 sealed interface AuthClientResult {
     data class Success(val session: AuthSession) : AuthClientResult
-    data class Failure(val message: String) : AuthClientResult
+    data class Failure(
+        val message: String,
+        val error: String? = null,
+    ) : AuthClientResult
 }
 
 sealed interface ServerConnectionResult {
@@ -165,12 +178,20 @@ private data class ErrorResponse(
     val message: String,
 )
 
-private suspend fun io.ktor.client.statement.HttpResponse.errorMessage(): String {
+private data class AuthErrorDetails(
+    val error: String?,
+    val message: String,
+)
+
+private suspend fun io.ktor.client.statement.HttpResponse.errorDetails(): AuthErrorDetails {
     val body = bodyAsText()
     val parsed = runCatching {
         AuthHttpJson.decodeFromString(ErrorResponse.serializer(), body)
     }.getOrNull()
-    return parsed?.message ?: "HTTP ${status.value}: ${body.take(240)}"
+    return AuthErrorDetails(
+        error = parsed?.error,
+        message = parsed?.message ?: "HTTP ${status.value}: ${body.take(240)}",
+    )
 }
 
 private val AuthHttpJson = Json {
@@ -178,3 +199,5 @@ private val AuthHttpJson = Json {
     ignoreUnknownKeys = true
     explicitNulls = false
 }
+
+private const val AuthHttpTimeoutMillis = 3_000L

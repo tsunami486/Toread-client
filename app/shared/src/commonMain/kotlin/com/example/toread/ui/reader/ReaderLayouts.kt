@@ -20,8 +20,10 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material.icons.automirrored.outlined.Article
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowLeft
@@ -30,20 +32,27 @@ import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Menu
 import androidx.compose.material.icons.filled.Remove
 import androidx.compose.material.icons.outlined.DarkMode
+import androidx.compose.material.icons.outlined.LightMode
 import androidx.compose.material.icons.outlined.Settings
 import androidx.compose.material.icons.outlined.TextFields
 import androidx.compose.material.icons.outlined.ViewColumn
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.PlainTooltip
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
+import androidx.compose.material3.TooltipAnchorPosition
+import androidx.compose.material3.TooltipBox
+import androidx.compose.material3.TooltipDefaults
+import androidx.compose.material3.rememberTooltipState
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
@@ -69,6 +78,7 @@ import com.example.toread.library.BookshelfBook
 import com.example.toread.reader.EpubImageBytesLoader
 import com.example.toread.platform.rememberSystemBarInsets
 import com.example.toread.ui.components.ScreenColumn
+import com.example.toread.ui.text.ToreadStrings
 import com.example.toread.ui.theme.toreadColors
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -82,6 +92,43 @@ private val DesktopReaderPageBackground = Color(0xFF1B2023)
 private val DesktopReaderPageText = Color(0xFFE4EAF0)
 private val DesktopReaderDivider = Color(0xFF2A3136)
 private val DesktopReaderMutedText = Color(0xFF9AA5AE)
+private val DesktopReaderDrawerText = Color(0xFFDCE4EA)
+
+private data class DesktopReaderPalette(
+    val background: Color,
+    val toolbarText: Color,
+    val controlBackground: Color,
+    val pageBackground: Color,
+    val pageText: Color,
+    val divider: Color,
+    val mutedText: Color,
+    val drawerText: Color,
+    val scrim: Color,
+)
+
+private val DesktopNightReaderPalette = DesktopReaderPalette(
+    background = DesktopReaderBackground,
+    toolbarText = DesktopReaderToolbarText,
+    controlBackground = DesktopReaderControlBackground,
+    pageBackground = DesktopReaderPageBackground,
+    pageText = DesktopReaderPageText,
+    divider = DesktopReaderDivider,
+    mutedText = DesktopReaderMutedText,
+    drawerText = DesktopReaderDrawerText,
+    scrim = Color.Black.copy(alpha = 0.48f),
+)
+
+private val DesktopLightReaderPalette = DesktopReaderPalette(
+    background = Color(0xFFECEFF1),
+    toolbarText = Color(0xFF4B5560),
+    controlBackground = Color(0xFFD9DEE4),
+    pageBackground = Color(0xFFF8F7F2),
+    pageText = Color(0xFF202428),
+    divider = Color(0xFFD4D2CB),
+    mutedText = Color(0xFF66717C),
+    drawerText = Color(0xFF23282E),
+    scrim = Color.Black.copy(alpha = 0.22f),
+)
 
 @Composable
 internal fun DesktopReaderLayout(
@@ -90,41 +137,88 @@ internal fun DesktopReaderLayout(
     pages: List<ReaderPageSlice>,
     pageIndex: Int,
     progress: Double,
+    isDoublePage: Boolean,
+    isNightMode: Boolean,
     onBack: () -> Unit,
     onPrevious: () -> Unit,
     onNext: () -> Unit,
+    onGoToPage: (Int) -> Unit,
+    onTogglePageMode: () -> Unit,
+    onToggleNightMode: () -> Unit,
 ) {
-    Column(
+    val palette = if (isNightMode) DesktopNightReaderPalette else DesktopLightReaderPalette
+    val chapterEntries = remember(pages) { pages.readerChapterEntries() }
+    val currentChapterOrd = pages.getOrNull(pageIndex)?.chapterOrd
+        ?: chapterEntries.lastOrNull { it.pageIndex <= pageIndex }?.chapterOrd
+        ?: 0
+    var chapterDrawerVisible by remember { mutableStateOf(false) }
+
+    Box(
         modifier = Modifier
             .fillMaxSize()
-            .background(DesktopReaderBackground)
-            .padding(start = 72.dp, top = 24.dp, end = 72.dp, bottom = 8.dp),
-        verticalArrangement = Arrangement.spacedBy(10.dp),
-        horizontalAlignment = Alignment.CenterHorizontally,
+            .background(palette.background),
     ) {
-        DesktopReaderTopBar(bookTitle = book.title, onBack = onBack)
-        DesktopReaderSpread(
-            bookTitle = book.title,
-            sourceText = sourceText,
-            pages = pages,
-            pageIndex = pageIndex,
-            progress = progress,
-            onPrevious = onPrevious,
-            onNext = onNext,
+        Column(
             modifier = Modifier
-                .weight(1f)
-                .fillMaxHeight()
-                .aspectRatio(DesktopSpreadAspectRatio)
-                .align(Alignment.CenterHorizontally),
-        )
-        Spacer(modifier = Modifier.height(12.dp))
+                .fillMaxSize()
+                .padding(start = 72.dp, top = 24.dp, end = 72.dp, bottom = 8.dp),
+            verticalArrangement = Arrangement.spacedBy(10.dp),
+            horizontalAlignment = Alignment.CenterHorizontally,
+        ) {
+            DesktopReaderTopBar(
+                bookTitle = book.title,
+                isDoublePage = isDoublePage,
+                isNightMode = isNightMode,
+                palette = palette,
+                onBack = onBack,
+                onOpenChapterDrawer = { chapterDrawerVisible = true },
+                onTogglePageMode = onTogglePageMode,
+                onToggleNightMode = onToggleNightMode,
+            )
+            DesktopReaderSpread(
+                bookTitle = book.title,
+                sourceText = sourceText,
+                pages = pages,
+                pageIndex = pageIndex,
+                progress = progress,
+                isDoublePage = isDoublePage,
+                palette = palette,
+                onPrevious = onPrevious,
+                onNext = onNext,
+                modifier = Modifier
+                    .weight(1f)
+                    .fillMaxHeight()
+                    .aspectRatio(if (isDoublePage) DesktopSpreadAspectRatio else ASeriesPaperAspectRatio)
+                    .align(Alignment.CenterHorizontally),
+            )
+            Spacer(modifier = Modifier.height(12.dp))
+        }
+        if (chapterDrawerVisible) {
+            DesktopChapterDrawer(
+                bookTitle = book.title,
+                chapters = chapterEntries,
+                currentChapterOrd = currentChapterOrd,
+                palette = palette,
+                onDismiss = { chapterDrawerVisible = false },
+                onSelectChapter = { chapter ->
+                    chapterDrawerVisible = false
+                    onGoToPage(chapter.pageIndex)
+                },
+            )
+        }
     }
 }
 
 @Composable
 private fun DesktopReaderTopBar(
     bookTitle: String,
+    isDoublePage: Boolean,
+    isNightMode: Boolean,
+    palette: DesktopReaderPalette,
     onBack: () -> Unit,
+    onOpenChapterDrawer: () -> Unit,
+    onTogglePageMode: () -> Unit,
+    onToggleNightMode: () -> Unit,
 ) {
     Row(
         modifier = Modifier
@@ -137,13 +231,13 @@ private fun DesktopReaderTopBar(
         TextButton(onClick = onBack) {
             Icon(
                 imageVector = Icons.AutoMirrored.Filled.ArrowBack,
-                contentDescription = "返回书架",
-                tint = DesktopReaderToolbarText,
+                contentDescription = ToreadStrings.BackToBookshelf,
+                tint = palette.toolbarText,
                 modifier = Modifier.size(18.dp),
             )
             Text(
                 text = bookTitle,
-                color = DesktopReaderToolbarText,
+                color = palette.toolbarText,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
             )
@@ -152,34 +246,65 @@ private fun DesktopReaderTopBar(
             horizontalArrangement = Arrangement.spacedBy(8.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            DesktopReaderToolbarButton(label = "目录", imageVector = Icons.Default.Menu)
-            DesktopReaderToolbarButton(label = "单页/双页", imageVector = Icons.Outlined.ViewColumn)
-            DesktopReaderToolbarButton(label = "夜间模式", imageVector = Icons.Outlined.DarkMode)
-            DesktopReaderToolbarButton(label = "字体", imageVector = Icons.Outlined.TextFields)
-            DesktopReaderToolbarButton(label = "字号减小", imageVector = Icons.Default.Remove)
-            DesktopReaderToolbarButton(label = "字号增大", imageVector = Icons.Default.Add)
+            DesktopReaderToolbarButton(
+                label = ToreadStrings.Catalog,
+                imageVector = Icons.Default.Menu,
+                palette = palette,
+                onClick = onOpenChapterDrawer,
+            )
+            DesktopReaderToolbarButton(
+                label = if (isDoublePage) {
+                    ToreadStrings.SwitchSinglePageReading
+                } else {
+                    ToreadStrings.SwitchDoublePageReading
+                },
+                imageVector = if (isDoublePage) Icons.AutoMirrored.Outlined.Article else Icons.Outlined.ViewColumn,
+                palette = palette,
+                onClick = onTogglePageMode,
+            )
+            DesktopReaderToolbarButton(
+                label = if (isNightMode) ToreadStrings.SwitchLightMode else ToreadStrings.SwitchDarkMode,
+                imageVector = if (isNightMode) Icons.Outlined.LightMode else Icons.Outlined.DarkMode,
+                palette = palette,
+                onClick = onToggleNightMode,
+            )
+            DesktopReaderToolbarButton(label = ToreadStrings.Font, imageVector = Icons.Outlined.TextFields, palette = palette)
+            DesktopReaderToolbarButton(label = ToreadStrings.DecreaseFontSize, imageVector = Icons.Default.Remove, palette = palette)
+            DesktopReaderToolbarButton(label = ToreadStrings.IncreaseFontSize, imageVector = Icons.Default.Add, palette = palette)
         }
     }
 }
 
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun DesktopReaderToolbarButton(
     label: String,
     imageVector: ImageVector,
+    palette: DesktopReaderPalette,
     onClick: () -> Unit = {},
 ) {
-    IconButton(
-        onClick = onClick,
-        modifier = Modifier
-            .size(34.dp)
-            .background(DesktopReaderControlBackground, RoundedCornerShape(50)),
+    TooltipBox(
+        positionProvider = TooltipDefaults.rememberTooltipPositionProvider(TooltipAnchorPosition.Above),
+        tooltip = {
+            PlainTooltip {
+                Text(label)
+            }
+        },
+        state = rememberTooltipState(),
     ) {
-        Icon(
-            imageVector = imageVector,
-            contentDescription = label,
-            tint = DesktopReaderToolbarText,
-            modifier = Modifier.size(18.dp),
-        )
+        IconButton(
+            onClick = onClick,
+            modifier = Modifier
+                .size(34.dp)
+                .background(palette.controlBackground, RoundedCornerShape(50)),
+        ) {
+            Icon(
+                imageVector = imageVector,
+                contentDescription = label,
+                tint = palette.toolbarText,
+                modifier = Modifier.size(18.dp),
+            )
+        }
     }
 }
 
@@ -190,6 +315,8 @@ private fun DesktopReaderSpread(
     pages: List<ReaderPageSlice>,
     pageIndex: Int,
     progress: Double,
+    isDoublePage: Boolean,
+    palette: DesktopReaderPalette,
     onPrevious: () -> Unit,
     onNext: () -> Unit,
     modifier: Modifier = Modifier,
@@ -198,7 +325,7 @@ private fun DesktopReaderSpread(
     Card(
         modifier = modifier,
         shape = RoundedCornerShape(8.dp),
-        colors = CardDefaults.cardColors(containerColor = DesktopReaderPageBackground),
+        colors = CardDefaults.cardColors(containerColor = palette.pageBackground),
     ) {
         Column(
             modifier = Modifier
@@ -217,37 +344,40 @@ private fun DesktopReaderSpread(
                     modifier = Modifier
                         .weight(1f)
                         .fillMaxHeight(),
-                    textColor = DesktopReaderPageText,
+                    textColor = palette.pageText,
                     bodyFontSize = typography.bodyFontSize,
                     bodyLineHeight = typography.bodyLineHeight,
                     bodyFontWeight = FontWeight.Medium,
                     bodyLetterSpacing = typography.bodyLetterSpacing,
                     bodyTextAlign = TextAlign.Start,
                 )
-                Box(
-                    modifier = Modifier
-                        .width(1.dp)
-                        .fillMaxHeight()
-                        .background(DesktopReaderDivider),
-                )
-                ReaderTextPage(
-                    page = pages.getOrNull(pageIndex + 1) ?: ReaderPageSlice(bookTitle, 0, 0),
-                    sourceText = sourceText,
-                    modifier = Modifier
-                        .weight(1f)
-                        .fillMaxHeight(),
-                    textColor = DesktopReaderPageText,
-                    bodyFontSize = typography.bodyFontSize,
-                    bodyLineHeight = typography.bodyLineHeight,
-                    bodyFontWeight = FontWeight.Medium,
-                    bodyLetterSpacing = typography.bodyLetterSpacing,
-                    bodyTextAlign = TextAlign.Start,
-                )
+                if (isDoublePage) {
+                    Box(
+                        modifier = Modifier
+                            .width(1.dp)
+                            .fillMaxHeight()
+                            .background(palette.divider),
+                    )
+                    ReaderTextPage(
+                        page = pages.getOrNull(pageIndex + 1) ?: ReaderPageSlice(bookTitle, 0, 0),
+                        sourceText = sourceText,
+                        modifier = Modifier
+                            .weight(1f)
+                            .fillMaxHeight(),
+                        textColor = palette.pageText,
+                        bodyFontSize = typography.bodyFontSize,
+                        bodyLineHeight = typography.bodyLineHeight,
+                        bodyFontWeight = FontWeight.Medium,
+                        bodyLetterSpacing = typography.bodyLetterSpacing,
+                        bodyTextAlign = TextAlign.Start,
+                    )
+                }
             }
             DesktopReaderBottomBar(
                 progress = progress,
                 canPrevious = pageIndex > 0,
-                canNext = pageIndex + 2 <= pages.lastIndex,
+                canNext = if (isDoublePage) pageIndex + 2 <= pages.lastIndex else pageIndex < pages.lastIndex,
+                palette = palette,
                 onPrevious = onPrevious,
                 onNext = onNext,
             )
@@ -260,6 +390,7 @@ private fun DesktopReaderBottomBar(
     progress: Double,
     canPrevious: Boolean,
     canNext: Boolean,
+    palette: DesktopReaderPalette,
     onPrevious: () -> Unit,
     onNext: () -> Unit,
 ) {
@@ -272,8 +403,8 @@ private fun DesktopReaderBottomBar(
             onClick = onPrevious,
             enabled = canPrevious,
             colors = ButtonDefaults.outlinedButtonColors(
-                contentColor = DesktopReaderToolbarText,
-                disabledContentColor = DesktopReaderMutedText.copy(alpha = 0.45f),
+                contentColor = palette.toolbarText,
+                disabledContentColor = palette.mutedText.copy(alpha = 0.45f),
             ),
             modifier = Modifier.align(Alignment.CenterStart),
         ) {
@@ -282,11 +413,11 @@ private fun DesktopReaderBottomBar(
                 contentDescription = null,
                 modifier = Modifier.size(16.dp),
             )
-            Text("上一页")
+            Text(ToreadStrings.PreviousPage)
         }
         Text(
             text = progress.toReaderPercentText(),
-            color = DesktopReaderMutedText,
+            color = palette.mutedText,
             style = MaterialTheme.typography.labelMedium,
             modifier = Modifier.align(Alignment.Center),
         )
@@ -294,12 +425,12 @@ private fun DesktopReaderBottomBar(
             onClick = onNext,
             enabled = canNext,
             colors = ButtonDefaults.outlinedButtonColors(
-                contentColor = DesktopReaderToolbarText,
-                disabledContentColor = DesktopReaderMutedText.copy(alpha = 0.45f),
+                contentColor = palette.toolbarText,
+                disabledContentColor = palette.mutedText.copy(alpha = 0.45f),
             ),
             modifier = Modifier.align(Alignment.CenterEnd),
         ) {
-            Text("下一页")
+            Text(ToreadStrings.NextPage)
             Icon(
                 imageVector = Icons.AutoMirrored.Filled.KeyboardArrowRight,
                 contentDescription = null,
@@ -314,6 +445,136 @@ private fun Double.toReaderPercentText(): String {
     val whole = scaled / 100
     val fraction = (scaled % 100).toString().padStart(2, '0')
     return "$whole.$fraction%"
+}
+
+@Composable
+private fun BoxScope.DesktopChapterDrawer(
+    bookTitle: String,
+    chapters: List<ReaderChapterEntry>,
+    currentChapterOrd: Int,
+    palette: DesktopReaderPalette,
+    onDismiss: () -> Unit,
+    onSelectChapter: (ReaderChapterEntry) -> Unit,
+) {
+    val chapterListState = rememberLazyListState()
+    val currentChapterIndex = chapters.indexOfFirst { it.chapterOrd == currentChapterOrd }
+
+    LaunchedEffect(currentChapterIndex, chapters.size) {
+        if (currentChapterIndex >= 0) {
+            chapterListState.animateScrollToItem((currentChapterIndex - 4).coerceAtLeast(0))
+        }
+    }
+
+    Box(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(palette.scrim)
+            .clickable(onClick = onDismiss),
+    )
+    Card(
+        modifier = Modifier
+            .align(Alignment.CenterEnd)
+            .fillMaxHeight()
+            .width(380.dp),
+        shape = RoundedCornerShape(topStart = 18.dp, bottomStart = 18.dp),
+        colors = CardDefaults.cardColors(containerColor = palette.pageBackground),
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(start = 24.dp, top = 28.dp, end = 24.dp, bottom = 22.dp),
+        ) {
+            Text(
+                text = ToreadStrings.Catalog,
+                color = palette.drawerText,
+                fontSize = 25.sp,
+                fontWeight = FontWeight.SemiBold,
+            )
+            Text(
+                text = bookTitle,
+                color = palette.mutedText,
+                fontSize = 14.sp,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.padding(top = 8.dp, bottom = 14.dp),
+            )
+            Text(
+                text = ToreadStrings.readChapterSummary(
+                    read = chapters.count { it.chapterOrd < currentChapterOrd },
+                    total = chapters.size,
+                ),
+                color = palette.mutedText,
+                fontSize = 14.sp,
+                modifier = Modifier.padding(bottom = 12.dp),
+            )
+            HorizontalDivider(color = palette.divider)
+            if (chapters.isEmpty()) {
+                Text(
+                    text = ToreadStrings.EmptyChapterList,
+                    color = palette.mutedText,
+                    fontSize = 16.sp,
+                    modifier = Modifier.padding(top = 24.dp),
+                )
+            } else {
+                LazyColumn(
+                    state = chapterListState,
+                    modifier = Modifier
+                        .weight(1f)
+                        .padding(top = 8.dp),
+                ) {
+                    items(chapters, key = { it.chapterOrd }) { chapter ->
+                        DesktopChapterRow(
+                            chapter = chapter,
+                            currentChapterOrd = currentChapterOrd,
+                            palette = palette,
+                            onSelectChapter = onSelectChapter,
+                        )
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun DesktopChapterRow(
+    chapter: ReaderChapterEntry,
+    currentChapterOrd: Int,
+    palette: DesktopReaderPalette,
+    onSelectChapter: (ReaderChapterEntry) -> Unit,
+) {
+    val isCurrent = chapter.chapterOrd == currentChapterOrd
+    val textColor = when {
+        chapter.chapterOrd < currentChapterOrd -> palette.mutedText
+        isCurrent -> MaterialTheme.toreadColors.currentChapter
+        else -> palette.drawerText
+    }
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clipToBounds()
+            .background(
+                if (isCurrent) MaterialTheme.toreadColors.currentChapter.copy(alpha = 0.12f) else Color.Transparent,
+                RoundedCornerShape(8.dp),
+            )
+            .clickable { onSelectChapter(chapter) }
+            .padding(horizontal = 12.dp, vertical = 14.dp),
+    ) {
+        Text(
+            text = chapter.title,
+            color = textColor,
+            fontSize = 16.sp,
+            fontWeight = if (isCurrent) FontWeight.SemiBold else FontWeight.Normal,
+            maxLines = 2,
+            overflow = TextOverflow.Ellipsis,
+        )
+        Text(
+            text = ToreadStrings.chapterPage(chapter.pageIndex),
+            color = palette.mutedText,
+            fontSize = 12.sp,
+            modifier = Modifier.padding(top = 4.dp),
+        )
+    }
 }
 
 @Composable
@@ -437,7 +698,7 @@ private fun AndroidReaderTopBar(book: BookshelfBook, onBack: () -> Unit) {
         TextButton(onClick = onBack) {
             Icon(
                 imageVector = Icons.AutoMirrored.Filled.ArrowBack,
-                contentDescription = "返回书架",
+                contentDescription = ToreadStrings.BackToBookshelf,
             )
         }
         Text(
@@ -478,11 +739,11 @@ private fun BoxScope.AndroidReaderBottomPanel(
             ) {
                 TextButton(onClick = onPrevious, enabled = canPrevious) {
                     Icon(imageVector = Icons.AutoMirrored.Filled.KeyboardArrowLeft, contentDescription = null)
-                    Text("上一页")
+                    Text(ToreadStrings.PreviousPage)
                 }
-                Text("${(progress * 100).roundToInt()}%")
+                Text(ToreadStrings.readerPercent(progress))
                 TextButton(onClick = onNext, enabled = canNext) {
-                    Text("下一页")
+                    Text(ToreadStrings.NextPage)
                     Icon(imageVector = Icons.AutoMirrored.Filled.KeyboardArrowRight, contentDescription = null)
                 }
             }
@@ -495,9 +756,9 @@ private fun BoxScope.AndroidReaderBottomPanel(
                 horizontalArrangement = Arrangement.SpaceEvenly,
                 verticalAlignment = Alignment.CenterVertically,
             ) {
-                ReaderPanelButton(label = "目录", imageVector = Icons.Default.Menu, onClick = onOpenChapterList)
-                ReaderPanelButton(label = "夜间", imageVector = Icons.Outlined.DarkMode)
-                ReaderPanelButton(label = "设置", imageVector = Icons.Outlined.Settings)
+                ReaderPanelButton(label = ToreadStrings.Catalog, imageVector = Icons.Default.Menu, onClick = onOpenChapterList)
+                ReaderPanelButton(label = ToreadStrings.NightMode, imageVector = Icons.Outlined.DarkMode)
+                ReaderPanelButton(label = ToreadStrings.ReaderSettings, imageVector = Icons.Outlined.Settings)
             }
         }
     }
@@ -562,14 +823,17 @@ private fun BoxScope.AndroidChapterDrawer(
                 modifier = Modifier.padding(top = 26.dp),
             )
             Text(
-                text = "已读 ${chapters.count { it.chapterOrd < currentChapterOrd }} / 共 ${chapters.size} 章",
+                text = ToreadStrings.readChapterSummary(
+                    read = chapters.count { it.chapterOrd < currentChapterOrd },
+                    total = chapters.size,
+                ),
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 fontSize = 17.sp,
                 modifier = Modifier.padding(top = 18.dp, bottom = 14.dp),
             )
             if (chapters.isEmpty()) {
                 Text(
-                    text = "尚未识别到章节",
+                    text = ToreadStrings.EmptyChapterList,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     fontSize = 18.sp,
                     modifier = Modifier.padding(top = 24.dp),
@@ -804,7 +1068,7 @@ private fun ReaderImageBlock(
                 contentAlignment = Alignment.Center,
             ) {
                 Text(
-                    text = image.resource.alt?.takeIf { it.isNotBlank() } ?: "图片无法显示",
+                    text = image.resource.alt?.takeIf { it.isNotBlank() } ?: ToreadStrings.ImageUnavailable,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
@@ -927,10 +1191,10 @@ private fun ReaderJustifiedLine(
 @Composable
 internal fun ReaderMessage(message: String, onBack: () -> Unit) {
     ScreenColumn {
-        Text("阅读", style = MaterialTheme.typography.headlineMedium, fontWeight = FontWeight.SemiBold)
+        Text(ToreadStrings.Reader, style = MaterialTheme.typography.headlineMedium, fontWeight = FontWeight.SemiBold)
         Text(message)
         OutlinedButton(onClick = onBack) {
-            Text("返回书架")
+            Text(ToreadStrings.BackToBookshelf)
         }
     }
 }

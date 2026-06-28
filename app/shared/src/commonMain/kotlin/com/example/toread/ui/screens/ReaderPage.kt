@@ -61,9 +61,11 @@ import com.example.toread.ui.reader.paginateForReader
 import com.example.toread.ui.reader.rememberReaderPaginationSpec
 import com.example.toread.ui.reader.saveReaderProgress
 import com.example.toread.ui.reader.toPageIndex
+import com.example.toread.ui.text.ToreadStrings
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeoutOrNull
 import kotlin.math.roundToInt
 @Composable
 internal fun ReaderPage(
@@ -101,6 +103,9 @@ internal fun ReaderPage(
     var measuredPages by remember(book?.bookHash) { mutableStateOf<List<ReaderPageSlice>>(emptyList()) }
     var paginationComplete by remember(book?.bookHash) { mutableStateOf(false) }
     var desktopReaderFocusReady by remember(book?.bookHash) { mutableStateOf(false) }
+    var hasUserNavigated by remember(book?.bookHash) { mutableStateOf(false) }
+    var desktopDoublePageEnabled by remember(book?.bookHash) { mutableStateOf(true) }
+    var desktopNightModeEnabled by remember(book?.bookHash) { mutableStateOf(true) }
     val focusRequester = remember { FocusRequester() }
 
     fun exitReaderWithoutProgress() {
@@ -138,11 +143,13 @@ internal fun ReaderPage(
         error = null
         restoredLocator = null
         restoredForMeasuredPages = false
-        val openingProgress = resolveOpeningProgress(
+        hasUserNavigated = false
+        val openingProgress = resolveLocalOpeningProgress(
             book = book,
             progressRepository = progressRepository,
-            remoteProgressSource = remoteProgressSource,
         )
+        restoredLocator = openingProgress?.locator
+            ?: bookshelfRepository?.progressLocator(book.bookHash)
         runCatching {
             withContext(Dispatchers.Default) {
                 readerContentLoader.load(book.filePath, book.format, book.title)
@@ -150,13 +157,34 @@ internal fun ReaderPage(
         }.fold(
             onSuccess = { loaded ->
                 document = loaded
-                restoredLocator = openingProgress?.locator
-                    ?: bookshelfRepository?.progressLocator(book.bookHash)
             },
             onFailure = { throwable ->
-                error = "打开失败：${throwable.message ?: "未知错误"}"
+                error = ToreadStrings.openBookFailed(throwable.message)
             },
         )
+    }
+
+    LaunchedEffect(book?.bookHash, remoteProgressSource, progressRepository) {
+        if (book == null) return@LaunchedEffect
+        val remoteOpeningProgress = resolveRemoteOpeningProgress(
+            book = book,
+            progressRepository = progressRepository,
+            remoteProgressSource = remoteProgressSource,
+        ) ?: return@LaunchedEffect
+
+        val remoteLocator = remoteOpeningProgress.locator
+        if (!hasUserNavigated && remoteLocator != null) {
+            restoredLocator = remoteLocator
+            restoredForMeasuredPages = false
+        } else {
+            ToreadClientLog.info(
+                LogArea,
+                "reader.open.remote.defer_seek",
+                "bookHash" to book.bookHash,
+                "source" to remoteOpeningProgress.source,
+                "chosenUpdatedAt" to remoteOpeningProgress.updatedAt,
+            )
+        }
     }
 
     LaunchedEffect(isAndroid, book?.bookHash) {
@@ -173,10 +201,10 @@ internal fun ReaderPage(
 
     if (book == null) {
         ScreenColumn {
-            Text("阅读", style = MaterialTheme.typography.headlineMedium, fontWeight = FontWeight.SemiBold)
-            Text("请先从书架打开一本书。")
+            Text(ToreadStrings.Reader, style = MaterialTheme.typography.headlineMedium, fontWeight = FontWeight.SemiBold)
+            Text(ToreadStrings.SelectBookBeforeReading)
             OutlinedButton(onClick = onBack) {
-                Text("返回书架")
+                Text(ToreadStrings.BackToBookshelf)
             }
         }
         return
@@ -194,7 +222,7 @@ internal fun ReaderPage(
             error != null -> ReaderMessage(message = error.orEmpty(), onBack = ::exitReaderWithoutProgress)
             loadedDocument == null -> ReaderLoadingIndicator()
             !loadedDocument.isReadable -> ReaderMessage(
-                message = loadedDocument.message ?: "当前格式暂不能直接阅读。",
+                message = loadedDocument.message ?: ToreadStrings.UnsupportedReadableFormat,
                 onBack = ::exitReaderWithoutProgress,
             )
             else -> BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
@@ -220,14 +248,22 @@ internal fun ReaderPage(
                 }
 
                 val pages = measuredPages
+                val desktopPageStep = if (isDesktop && desktopDoublePageEnabled) 2 else 1
+                val normalizeForDoublePage = isDesktop && desktopDoublePageEnabled
 
-                LaunchedEffect(book.bookHash, pages.size, restoredForMeasuredPages, isDesktop, paginationComplete) {
+                LaunchedEffect(
+                    book.bookHash,
+                    pages.size,
+                    restoredForMeasuredPages,
+                    normalizeForDoublePage,
+                    paginationComplete,
+                ) {
                     if (!restoredForMeasuredPages && pages.isNotEmpty() && paginationComplete) {
                         val requestedPage = restoredLocator?.toPageIndex(pages) ?: 0
                         val normalizedPage = normalizePageIndex(
                             requestedPage,
                             pages.size,
-                            isDesktop,
+                            normalizeForDoublePage,
                         )
                         val chosenPage = pages.getOrNull(normalizedPage)
                         pageIndex = normalizedPage
@@ -279,8 +315,9 @@ internal fun ReaderPage(
 
                 fun goToPage(target: Int) {
                     if (pages.isEmpty()) return
-                    val normalized = normalizePageIndex(target, pages.size, isDesktop)
+                    val normalized = normalizePageIndex(target, pages.size, normalizeForDoublePage)
                     if (normalized == pageIndex) return
+                    hasUserNavigated = true
                     pageIndex = normalized
                     saveCurrentProgress(normalized)
                     if (isAndroid && !controlsVisible) {
@@ -291,6 +328,14 @@ internal fun ReaderPage(
                 fun exitReader() {
                     saveCurrentProgress(remoteSyncPolicy = ReaderProgressRemoteSyncPolicy.Immediate)
                     exitReaderWithoutProgress()
+                }
+
+                fun toggleDesktopPageMode() {
+                    val nextDoublePage = !desktopDoublePageEnabled
+                    desktopDoublePageEnabled = nextDoublePage
+                    if (pages.isNotEmpty()) {
+                        pageIndex = normalizePageIndex(pageIndex, pages.size, isDesktop && nextDoublePage)
+                    }
                 }
 
                 val contentModifier = Modifier
@@ -305,11 +350,11 @@ internal fun ReaderPage(
                                     if (event.type != KeyEventType.KeyUp) return@onPreviewKeyEvent false
                                     when (event.key) {
                                         Key.DirectionLeft -> {
-                                            goToPage(pageIndex - 2)
+                                            goToPage(pageIndex - desktopPageStep)
                                             true
                                         }
                                         Key.DirectionRight -> {
-                                            goToPage(pageIndex + 2)
+                                            goToPage(pageIndex + desktopPageStep)
                                             true
                                         }
                                         else -> false
@@ -336,9 +381,14 @@ internal fun ReaderPage(
                             pages = pages,
                             pageIndex = currentPageIndex,
                             progress = progress,
+                            isDoublePage = desktopDoublePageEnabled,
+                            isNightMode = desktopNightModeEnabled,
                             onBack = ::exitReader,
-                            onPrevious = { goToPage(pageIndex - 2) },
-                            onNext = { goToPage(pageIndex + 2) },
+                            onPrevious = { goToPage(pageIndex - desktopPageStep) },
+                            onNext = { goToPage(pageIndex + desktopPageStep) },
+                            onGoToPage = { targetPage -> goToPage(targetPage) },
+                            onTogglePageMode = ::toggleDesktopPageMode,
+                            onToggleNightMode = { desktopNightModeEnabled = !desktopNightModeEnabled },
                         )
                     } else {
                         AndroidReaderLayout(
@@ -378,23 +428,56 @@ private fun ReaderLoadingIndicator() {
     }
 }
 
-private suspend fun resolveOpeningProgress(
+private fun resolveLocalOpeningProgress(
     book: BookshelfBook,
     progressRepository: ReadingProgressRepository?,
-    remoteProgressSource: ReadingProgressRemoteSource?,
 ): ChosenReaderProgress? {
     val bookHash = book.bookHash
     ToreadClientLog.info(LogArea, "reader.open.start", "bookHash" to bookHash)
 
     val localProgress = progressRepository?.localProgressSnapshot(bookHash)
+    val chosen = localProgress?.locator?.let { locator ->
+        ChosenReaderProgress(
+            source = "local",
+            locator = locator,
+            updatedAt = localProgress.updatedAt,
+            progress = localProgress.progress,
+        )
+    }
 
-    val remoteResult = remoteProgressSource?.fetch(bookHash)
-        ?: RemoteProgressFetchResult.Unavailable("远端进度源未初始化")
+    ToreadClientLog.info(
+        LogArea,
+        "reader.open.local_choose",
+        "bookHash" to bookHash,
+        "localUpdatedAt" to localProgress?.updatedAt,
+        "localProgress" to localProgress?.progress,
+        "localSyncStatus" to localProgress?.syncStatus,
+        "localLocator" to localProgress?.locator.describeLocator(),
+        "source" to chosen?.source,
+    )
+    return chosen
+}
+
+private suspend fun resolveRemoteOpeningProgress(
+    book: BookshelfBook,
+    progressRepository: ReadingProgressRepository?,
+    remoteProgressSource: ReadingProgressRemoteSource?,
+): ChosenReaderProgress? {
+    val bookHash = book.bookHash
+    val localProgress = progressRepository?.localProgressSnapshot(bookHash)
+
+    val remoteResult = if (remoteProgressSource == null) {
+        RemoteProgressFetchResult.Unavailable("远端进度源未初始化")
+    } else {
+        withTimeoutOrNull(RemoteProgressFetchTimeoutMillis) {
+            remoteProgressSource.fetch(bookHash)
+        } ?: RemoteProgressFetchResult.Failed("远端进度请求超时")
+    }
 
     val remoteProgress = (remoteResult as? RemoteProgressFetchResult.Found)?.progress
     ToreadClientLog.info(
         LogArea,
-        "reader.open.progress",
+        "reader.open.remote_progress",
         "bookHash" to bookHash,
         "fetchStatus" to remoteResult.fetchStatus(),
         "fetchError" to remoteResult.fetchError(),
@@ -435,18 +518,12 @@ private suspend fun resolveOpeningProgress(
                 }
             }
         }
-        localProgress?.locator != null -> ChosenReaderProgress(
-            source = "local",
-            locator = localProgress.locator,
-            updatedAt = localProgress.updatedAt,
-            progress = localProgress.progress,
-        )
         else -> null
     }
 
     ToreadClientLog.info(
         LogArea,
-        "reader.open.choose",
+        "reader.open.remote_choose",
         "bookHash" to bookHash,
         "source" to chosen?.source,
         "chosenUpdatedAt" to chosen?.updatedAt,
@@ -500,3 +577,4 @@ private fun BookLocator?.readerCharOffset(): Long? =
     }
 
 private const val LogArea = "sync"
+private const val RemoteProgressFetchTimeoutMillis = 2_500L

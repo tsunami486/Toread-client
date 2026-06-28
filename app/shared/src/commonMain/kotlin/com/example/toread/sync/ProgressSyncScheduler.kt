@@ -8,6 +8,7 @@ import kotlinx.coroutines.launch
 class ProgressSyncScheduler(
     private val scope: CoroutineScope,
     private val syncQueueProcessorProvider: () -> SyncQueueProcessor?,
+    private val onFlushFinished: (SyncRunSummary) -> Unit = {},
     private val debounceMillis: Long = DefaultDebounceMillis,
 ) {
     private var debounceJob: Job? = null
@@ -17,7 +18,7 @@ class ProgressSyncScheduler(
         debounceJob = scope.launch {
             delay(debounceMillis)
             debounceJob = null
-            syncQueueProcessorProvider()?.flushPending()
+            syncQueueProcessorProvider()?.flushPending()?.let(onFlushFinished)
         }
     }
 
@@ -25,7 +26,7 @@ class ProgressSyncScheduler(
         debounceJob?.cancel()
         debounceJob = null
         return scope.launch {
-            syncQueueProcessorProvider()?.flushPending()
+            syncQueueProcessorProvider()?.flushPending()?.let(onFlushFinished)
         }
     }
 

@@ -1,6 +1,7 @@
 package com.example.toread.sync
 
 import io.ktor.client.HttpClient
+import io.ktor.client.plugins.HttpTimeout
 import io.ktor.client.plugins.contentnegotiation.ContentNegotiation
 import io.ktor.client.request.bearerAuth
 import io.ktor.client.request.header
@@ -20,6 +21,11 @@ class HttpBookMetadataSyncUploader(
     private val baseUrlProvider: () -> String,
     private val accessTokenProvider: suspend () -> String?,
     private val client: HttpClient = HttpClient {
+        install(HttpTimeout) {
+            connectTimeoutMillis = BookSyncHttpTimeoutMillis
+            requestTimeoutMillis = BookSyncHttpTimeoutMillis
+            socketTimeoutMillis = BookSyncHttpTimeoutMillis
+        }
         install(ContentNegotiation) {
             json(BookSyncHttpJson)
         }
@@ -122,3 +128,5 @@ private val BookSyncHttpJson = Json {
     ignoreUnknownKeys = true
     explicitNulls = false
 }
+
+private const val BookSyncHttpTimeoutMillis = 3_000L

@@ -58,6 +58,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.toread.library.BookshelfBook
 import com.example.toread.platform.CoverImageBytesLoader
+import com.example.toread.ui.text.ToreadStrings
 import com.example.toread.ui.theme.toreadColors
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -65,10 +66,10 @@ import org.jetbrains.compose.resources.decodeToImageBitmap
 import kotlin.math.roundToInt
 
 private enum class BookshelfFilter(val label: String) {
-    All("全部"),
-    Reading("在读"),
-    Unread("未读"),
-    Finished("已读"),
+    All(ToreadStrings.FilterAll),
+    Reading(ToreadStrings.FilterReading),
+    Unread(ToreadStrings.FilterUnread),
+    Finished(ToreadStrings.FilterFinished),
 }
 
 @Composable
@@ -142,13 +143,13 @@ internal fun BookshelfPage(
                     modifier = Modifier.size(20.dp),
                 )
                 Spacer(modifier = Modifier.width(8.dp))
-                Text("导入 EPUB / PDF / TXT", fontSize = 17.sp, fontWeight = FontWeight.Medium)
+                Text(ToreadStrings.ImportEpubPdfTxt, fontSize = 17.sp, fontWeight = FontWeight.Medium)
             }
             continueBook?.let { book ->
                 ContinueReadingSection(book = book, onOpenBook = onOpenBook)
             }
             Text(
-                text = "全部书籍",
+                text = ToreadStrings.BooksSection,
                 color = MaterialTheme.colorScheme.onSurface,
                 fontSize = 20.sp,
                 fontWeight = FontWeight.SemiBold,
@@ -180,10 +181,7 @@ private fun BookshelfHeader(
     onSettings: () -> Unit,
     isRefreshing: Boolean,
 ) {
-    val syncSummary = buildList {
-        add("$pendingSyncCount 项等待同步")
-        if (failedSyncCount > 0) add("$failedSyncCount 项同步失败")
-    }.joinToString(" · ")
+    val syncSummary = ToreadStrings.syncPendingSummary(pendingSyncCount, failedSyncCount)
 
     Row(
         modifier = Modifier.fillMaxWidth(),
@@ -191,9 +189,9 @@ private fun BookshelfHeader(
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-            Text("书架", color = MaterialTheme.colorScheme.onSurface, fontSize = 36.sp, fontWeight = FontWeight.Bold)
+            Text(ToreadStrings.BookshelfTitle, color = MaterialTheme.colorScheme.onSurface, fontSize = 36.sp, fontWeight = FontWeight.Bold)
             Text(
-                text = "本地书库 · $bookCount 本书 · $syncSummary",
+                text = ToreadStrings.bookshelfSummary(bookCount, syncSummary),
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 fontSize = 15.sp,
             )
@@ -205,7 +203,7 @@ private fun BookshelfHeader(
             )
             HeaderIconButton(
                 imageVector = Icons.Outlined.Settings,
-                contentDescription = "设置",
+                contentDescription = ToreadStrings.Settings,
                 onClick = onSettings,
             )
         }
@@ -231,7 +229,7 @@ private fun RefreshHeaderIconButton(
         } else {
             Icon(
                 imageVector = Icons.Default.Refresh,
-                contentDescription = "刷新",
+                contentDescription = ToreadStrings.Refresh,
                 tint = MaterialTheme.colorScheme.onSurfaceVariant,
             )
         }
@@ -261,13 +259,13 @@ private fun BookshelfSearchBox(query: String, onQueryChange: (String) -> Unit) {
     OutlinedTextField(
         value = query,
         onValueChange = onQueryChange,
-        placeholder = { Text("搜索书名、作者或文件名", color = MaterialTheme.colorScheme.onSurfaceVariant) },
+        placeholder = { Text(ToreadStrings.SearchBooksPlaceholder, color = MaterialTheme.colorScheme.onSurfaceVariant) },
         singleLine = true,
         shape = RoundedCornerShape(24.dp),
         leadingIcon = {
             Icon(
                 imageVector = Icons.Outlined.Search,
-                contentDescription = "搜索",
+                contentDescription = ToreadStrings.Search,
                 tint = MaterialTheme.colorScheme.onSurfaceVariant,
             )
         },
@@ -281,7 +279,7 @@ private fun BookshelfSearchBox(query: String, onQueryChange: (String) -> Unit) {
 @Composable
 private fun ContinueReadingSection(book: BookshelfBook, onOpenBook: (BookshelfBook) -> Unit) {
     Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-        SectionTitle("继续阅读")
+        SectionTitle(ToreadStrings.ContinueReading)
         Card(
             modifier = Modifier.fillMaxWidth(),
             shape = RoundedCornerShape(20.dp),
@@ -316,7 +314,7 @@ private fun ContinueReadingSection(book: BookshelfBook, onOpenBook: (BookshelfBo
                         Text(book.metaLine(), color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 14.sp)
                         Text(book.progressLabel(), color = MaterialTheme.colorScheme.primary, fontSize = 14.sp)
                         ProgressLine(progress = book.progress)
-                        Text("上次阅读：${book.lastReadLabel()}", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 13.sp)
+                        Text(ToreadStrings.lastReadAt(book.lastReadLabel()), color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 13.sp)
                     }
                 }
                 Row(
@@ -324,7 +322,7 @@ private fun ContinueReadingSection(book: BookshelfBook, onOpenBook: (BookshelfBo
                     horizontalArrangement = Arrangement.End,
                 ) {
                     ReaderActionButton(
-                        text = "继续阅读",
+                        text = ToreadStrings.ContinueReading,
                         onClick = { onOpenBook(book) },
                     )
                 }
@@ -393,13 +391,13 @@ private fun EmptyBookshelfCard(hasBooks: Boolean, onImport: () -> Unit) {
             verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {
             Text(
-                if (hasBooks) "没有符合条件的书" else "还没有可阅读的书",
+                if (hasBooks) ToreadStrings.NoMatchingBooks else ToreadStrings.NoReadableBooks,
                 color = MaterialTheme.colorScheme.onSurface,
                 fontSize = 18.sp,
                 fontWeight = FontWeight.SemiBold,
             )
             Text(
-                if (hasBooks) "换个关键词或筛选项试试。" else "导入 EPUB、PDF 或 TXT 文件后会显示在这里。",
+                if (hasBooks) ToreadStrings.TryAnotherSearch else ToreadStrings.EmptyBookshelfHint,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
             Button(
@@ -407,7 +405,7 @@ private fun EmptyBookshelfCard(hasBooks: Boolean, onImport: () -> Unit) {
                 shape = RoundedCornerShape(24.dp),
                 colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.primary),
             ) {
-                Text("导入书籍")
+                Text(ToreadStrings.ImportBooks)
             }
         }
     }
@@ -457,7 +455,7 @@ private fun BookCard(book: BookshelfBook, onOpenBook: (BookshelfBook) -> Unit) {
                 horizontalArrangement = Arrangement.End,
             ) {
                 ReaderActionButton(
-                    text = if (book.progress > 0.0) "继续阅读" else "打开",
+                    text = if (book.progress > 0.0) ToreadStrings.ContinueReading else ToreadStrings.Open,
                     onClick = { onOpenBook(book) },
                 )
             }
@@ -501,7 +499,7 @@ private fun BookCover(book: BookshelfBook) {
         if (loadedCover != null) {
             Image(
                 bitmap = loadedCover,
-                contentDescription = "${book.title} 封面",
+                contentDescription = ToreadStrings.bookCoverContentDescription(book.title),
                 contentScale = ContentScale.Crop,
                 modifier = Modifier.fillMaxSize(),
             )
@@ -574,13 +572,13 @@ private fun BookshelfBook.matchesFilter(filter: BookshelfFilter): Boolean =
     }
 
 private fun BookshelfBook.metaLine(): String =
-    "${format.uppercase()} · ${author ?: "未知作者"}"
+    "${format.uppercase()} · ${author ?: ToreadStrings.UnknownAuthor}"
 
 private fun BookshelfBook.progressLabel(): String =
-    "已读 ${(progress.coerceIn(0.0, 1.0) * 100).roundToInt()}%"
+    ToreadStrings.bookProgress(progress)
 
 private fun BookshelfBook.lastReadLabel(): String =
-    if (lastReadAt.isNullOrBlank()) "尚未开始" else "刚刚"
+    if (lastReadAt.isNullOrBlank()) ToreadStrings.NotStarted else ToreadStrings.JustNow
 
 private fun BookshelfBook.fileName(): String =
     filePath.substringAfterLast('/').substringAfterLast('\\')
@@ -593,8 +591,8 @@ private fun String.isPendingSync(): Boolean =
 
 private fun String.displaySyncStatus(): String =
     when (normalizedSyncStatus()) {
-        "synced" -> "已同步"
-        "failed" -> "同步失败"
-        "pending" -> "等待同步"
-        else -> "等待同步"
+        "synced" -> ToreadStrings.Synced
+        "failed" -> ToreadStrings.SyncFailed
+        "pending" -> ToreadStrings.WaitingSync
+        else -> ToreadStrings.WaitingSync
     }

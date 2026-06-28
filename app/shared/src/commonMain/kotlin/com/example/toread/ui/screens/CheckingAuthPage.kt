@@ -5,11 +5,12 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.text.font.FontWeight
 import com.example.toread.ui.components.ScreenColumn
+import com.example.toread.ui.text.ToreadStrings
 
 @Composable
 internal fun CheckingAuthPage() {
     ScreenColumn {
-        Text("正在启动", style = MaterialTheme.typography.headlineMedium, fontWeight = FontWeight.SemiBold)
-        Text("正在读取本地登录状态。")
+        Text(ToreadStrings.CheckingStartupTitle, style = MaterialTheme.typography.headlineMedium, fontWeight = FontWeight.SemiBold)
+        Text(ToreadStrings.CheckingAuthState)
     }
 }

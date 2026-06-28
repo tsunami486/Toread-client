@@ -3,12 +3,16 @@ package com.example.toread
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.safeContentPadding
+import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Surface
+import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
@@ -24,11 +28,12 @@ import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
 import com.example.toread.auth.AuthClient
 import com.example.toread.auth.AuthClientResult
-import com.example.toread.auth.ServerConnectionResult
 import com.example.toread.importing.BookImportService
 import com.example.toread.importing.createToreadDatabase
 import com.example.toread.library.BookshelfBook
 import com.example.toread.library.BookshelfRepository
+import com.example.toread.network.ServerConnectionMonitor
+import com.example.toread.network.ServerConnectionState
 import com.example.toread.progress.ApplyProgressResult
 import com.example.toread.progress.ReadingProgressRepository
 import com.example.toread.platform.AppBackgroundNotifier
@@ -41,13 +46,16 @@ import com.example.toread.sync.HttpReadingProgressRemoteSource
 import com.example.toread.sync.HttpBookMetadataSyncUploader
 import com.example.toread.sync.ProgressSyncScheduler
 import com.example.toread.sync.RemoteProgressFetchResult
+import com.example.toread.sync.SyncRunSummary
 import com.example.toread.sync.SyncQueueProcessor
 import com.example.toread.ui.screens.AuthPage
 import com.example.toread.ui.screens.BookshelfPage
 import com.example.toread.ui.screens.ImportPage
 import com.example.toread.ui.screens.ReaderPage
 import com.example.toread.ui.screens.SettingsPage
+import com.example.toread.ui.text.ToreadStrings
 import com.example.toread.ui.theme.ToreadTheme
+import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.launch
 
 private enum class ToreadScreen {
@@ -74,7 +82,12 @@ fun ToreadApp() {
     var books by remember { mutableStateOf<List<BookshelfBook>>(emptyList()) }
     var refreshKey by remember { mutableIntStateOf(0) }
     var dynamicColorEnabled by remember { mutableStateOf(false) }
+    var autoSyncEnabled by remember { mutableStateOf(true) }
     var syncRunning by remember { mutableStateOf(false) }
+    var serverConnectionState by remember {
+        mutableStateOf<ServerConnectionState>(ServerConnectionState.Checking(startedAt = ""))
+    }
+    var previousServerConnectionState by remember { mutableStateOf<ServerConnectionState?>(null) }
 
     fun showAppMessage(message: String) {
         appScope.launch {
@@ -102,6 +115,14 @@ fun ToreadApp() {
             AuthClient(
                 baseUrlProvider = { repository.serverBaseUrl(defaultServerBaseUrl) },
                 tokenStore = tokenStore,
+            )
+        }
+    }
+    val serverConnectionMonitor = remember(appScope, authClient) {
+        authClient?.let { client ->
+            ServerConnectionMonitor(
+                scope = appScope,
+                healthCheck = { client.checkServerConnection() },
             )
         }
     }
@@ -140,18 +161,26 @@ fun ToreadApp() {
             null
         }
     }
-    val progressSyncScheduler = remember(appScope, syncQueueProcessor) {
+    val progressSyncScheduler = remember(appScope, syncQueueProcessor, autoSyncEnabled, serverConnectionMonitor) {
         ProgressSyncScheduler(
             scope = appScope,
-            syncQueueProcessorProvider = { syncQueueProcessor },
+            syncQueueProcessorProvider = { if (autoSyncEnabled) syncQueueProcessor else null },
+            onFlushFinished = { summary ->
+                when {
+                    summary.uploaded > 0 -> serverConnectionMonitor?.markOnline("auto_progress_flush")
+                    (summary.failed > 0 || summary.skipped > 0) && summary.lastError.shouldTriggerServerCheck() -> {
+                        serverConnectionMonitor?.triggerCheck("auto_progress_flush")
+                    }
+                }
+            },
         )
     }
 
     suspend fun pullRemoteProgressForBooks(): RemoteProgressPullSummary {
         val source = remoteProgressSource
-            ?: return RemoteProgressPullSummary(unavailableReason = "远端进度服务未初始化")
+            ?: return RemoteProgressPullSummary(unavailableReason = ToreadStrings.RemoteProgressSourceUnavailable)
         val repository = progressRepository
-            ?: return RemoteProgressPullSummary(unavailableReason = "本地进度服务未初始化")
+            ?: return RemoteProgressPullSummary(unavailableReason = ToreadStrings.LocalProgressServiceUnavailable)
         val localBooks = books.ifEmpty { bookshelfRepository?.listBooks().orEmpty() }
 
         var applied = 0
@@ -199,7 +228,64 @@ fun ToreadApp() {
         )
     }
 
-    fun runSyncAndRefresh() {
+    suspend fun refreshAuthSessionIfNeeded() {
+        val repository = settingsRepository ?: return
+        val client = authClient ?: return
+        if (repository.currentAuthMode() != AuthMode.LoggedIn) return
+
+        val refreshToken = repository.refreshToken()
+        if (refreshToken.isNullOrBlank()) return
+
+        when (val result = client.refresh(refreshToken)) {
+            is AuthClientResult.Success -> {
+                repository.setLoggedIn(result.session.email)
+                repository.setRefreshToken(result.session.refreshToken)
+                serverConnectionMonitor?.markOnline("auth.refresh")
+            }
+            is AuthClientResult.Failure -> {
+                if (result.isInvalidRefreshToken()) {
+                    tokenStore.clear()
+                    repository.clearAuthMode()
+                    showAppMessage(ToreadStrings.LoginExpired)
+                    return
+                }
+                showAppMessage(ToreadStrings.refreshAuthFailed(result.message))
+                if (result.message.shouldTriggerServerCheck()) {
+                    serverConnectionMonitor?.triggerCheck("auth_refresh_failed")
+                }
+            }
+        }
+    }
+
+    fun updateConnectionAfterSync(
+        summary: SyncRunSummary?,
+        remoteSummary: RemoteProgressPullSummary,
+        source: String,
+    ) {
+        when {
+            summary?.uploaded?.let { it > 0 } == true ||
+                remoteSummary.checked > 0 && remoteSummary.failed == 0 && remoteSummary.unavailableReason == null -> {
+                serverConnectionMonitor?.markOnline(source)
+            }
+            summary?.failed?.let { it > 0 } == true ||
+                summary?.skipped?.let { it > 0 } == true ||
+                remoteSummary.failed > 0 ||
+                remoteSummary.unavailableReason != null -> {
+                if (
+                    summary?.lastError.shouldTriggerServerCheck() ||
+                    remoteSummary.lastError.shouldTriggerServerCheck() ||
+                    remoteSummary.unavailableReason.shouldTriggerServerCheck()
+                ) {
+                    serverConnectionMonitor?.triggerCheck(source)
+                }
+            }
+        }
+    }
+
+    fun runSyncAndRefresh(
+        showResult: Boolean = true,
+        source: String = "manual_refresh",
+    ) {
         if (syncRunning) return
         syncRunning = true
         appScope.launch {
@@ -208,27 +294,36 @@ fun ToreadApp() {
                 bookshelfRepository?.ensurePendingBookMetadataQueued()
                 val summary = syncQueueProcessor?.flushPending(limit = Int.MAX_VALUE)
                 val remoteSummary = pullRemoteProgressForBooks()
+                updateConnectionAfterSync(summary, remoteSummary, source)
                 val resultMessage = when {
-                    summary == null -> "刷新失败：同步服务未初始化"
-                    summary.failed > 0 -> "刷新失败：${summary.lastError ?: "请稍后重试"}"
-                    summary.skipped > 0 -> "刷新失败：${summary.lastError ?: "当前为离线状态"}"
-                    remoteSummary.unavailableReason != null -> "刷新失败：${remoteSummary.unavailableReason}"
-                    remoteSummary.failed > 0 -> "刷新失败：${remoteSummary.lastError ?: "云端进度获取失败"}"
-                    remoteSummary.applied > 0 -> "刷新成功：已更新 ${remoteSummary.applied} 本书的云端进度"
-                    else -> "刷新成功"
+                    summary == null -> ToreadStrings.refreshFailed(ToreadStrings.SyncServiceUnavailable)
+                    summary.failed > 0 -> ToreadStrings.refreshFailed(summary.lastError ?: ToreadStrings.UnknownError)
+                    summary.skipped > 0 -> ToreadStrings.refreshFailed(summary.lastError ?: ToreadStrings.CurrentOffline)
+                    remoteSummary.unavailableReason != null -> ToreadStrings.refreshFailed(remoteSummary.unavailableReason)
+                    remoteSummary.failed > 0 -> ToreadStrings.refreshFailed(
+                        remoteSummary.lastError ?: ToreadStrings.RemoteProgressFetchFailed,
+                    )
+                    remoteSummary.applied > 0 -> ToreadStrings.remoteProgressUpdated(remoteSummary.applied)
+                    else -> ToreadStrings.RefreshSuccess
                 }
-                showAppMessage(resultMessage)
+                if (showResult) {
+                    showAppMessage(resultMessage)
+                }
                 refreshKey++
             } catch (throwable: Throwable) {
-                showAppMessage("刷新失败：${throwable.message ?: "未知错误"}")
+                serverConnectionMonitor?.triggerCheck(source)
+                if (showResult) {
+                    showAppMessage(ToreadStrings.refreshFailed(throwable.message ?: ToreadStrings.UnknownError))
+                }
             } finally {
                 syncRunning = false
             }
         }
     }
 
-    DisposableEffect(progressSyncScheduler) {
+    DisposableEffect(progressSyncScheduler, serverConnectionMonitor) {
         AppBackgroundNotifier.setOnEnterBackground {
+            serverConnectionMonitor?.triggerCheck("app_background")
             progressSyncScheduler.flushNow()
         }
         onDispose {
@@ -236,43 +331,71 @@ fun ToreadApp() {
         }
     }
 
-    LaunchedEffect(databaseResult.exceptionOrNull()) {
-        databaseResult.exceptionOrNull()?.let {
-            showAppMessage("本地数据库初始化失败：${it.message ?: "未知错误"}")
+    DisposableEffect(serverConnectionMonitor) {
+        serverConnectionMonitor?.start()
+        onDispose {
+            serverConnectionMonitor?.stop()
         }
     }
 
-    LaunchedEffect(settingsRepository, authClient) {
-        dynamicColorEnabled = settingsRepository?.dynamicColorEnabled() ?: false
-        if (settingsRepository == null || authClient == null) return@LaunchedEffect
-
-        when (authClient.checkServerConnection()) {
-            ServerConnectionResult.Success -> Unit
-            is ServerConnectionResult.Failure -> {
-                showAppMessage("连接服务器失败，当前为离线状态。")
-                return@LaunchedEffect
-            }
+    LaunchedEffect(serverConnectionMonitor) {
+        val monitor = serverConnectionMonitor
+        if (monitor == null) {
+            serverConnectionState = ServerConnectionState.Offline(
+                reason = ToreadStrings.ServerConnectionMonitorUnavailable,
+                checkedAt = "",
+                retrying = false,
+            )
+            return@LaunchedEffect
         }
+        monitor.state.collect { state ->
+            serverConnectionState = state
+        }
+    }
 
-        if (settingsRepository.currentAuthMode() == AuthMode.LoggedIn) {
-            val refreshToken = settingsRepository.refreshToken()
-            if (!refreshToken.isNullOrBlank()) {
-                when (val result = authClient.refresh(refreshToken)) {
-                    is AuthClientResult.Success -> {
-                        settingsRepository.setLoggedIn(result.session.email)
-                        settingsRepository.setRefreshToken(result.session.refreshToken)
-                    }
-                    is AuthClientResult.Failure -> {
-                        showAppMessage("刷新登录状态失败：${result.message}")
-                    }
+    LaunchedEffect(databaseResult.exceptionOrNull()) {
+        databaseResult.exceptionOrNull()?.let {
+            showAppMessage(ToreadStrings.databaseInitFailed(it.message))
+        }
+    }
+
+    LaunchedEffect(settingsRepository) {
+        dynamicColorEnabled = settingsRepository?.dynamicColorEnabled() ?: false
+        autoSyncEnabled = settingsRepository?.autoSyncEnabled() ?: true
+    }
+
+    LaunchedEffect(serverConnectionState, settingsRepository, authClient, autoSyncEnabled) {
+        val previous = previousServerConnectionState
+        previousServerConnectionState = serverConnectionState
+
+        when (serverConnectionState) {
+            is ServerConnectionState.Offline -> {
+                if (previous !is ServerConnectionState.Offline) {
+                    showAppMessage(ToreadStrings.ServerOfflineSnackbar)
                 }
             }
+            is ServerConnectionState.Online -> {
+                val wasOffline = previous is ServerConnectionState.Offline
+                val shouldRefreshAuth = previous == null ||
+                    previous is ServerConnectionState.Checking ||
+                    wasOffline
+                if (wasOffline) {
+                    showAppMessage(ToreadStrings.ServerReconnectedSnackbar)
+                }
+                if (shouldRefreshAuth) {
+                    refreshAuthSessionIfNeeded()
+                }
+                if (wasOffline && autoSyncEnabled) {
+                    runSyncAndRefresh(showResult = false, source = "server_reconnected")
+                }
+            }
+            is ServerConnectionState.Checking -> Unit
         }
     }
 
     LaunchedEffect(bookshelfRepository, refreshKey) {
         books = runCatching { bookshelfRepository?.listBooks().orEmpty() }
-            .onFailure { showAppMessage("读取书架失败：${it.message ?: "未知错误"}") }
+            .onFailure { showAppMessage(ToreadStrings.readBookshelfFailed(it.message)) }
             .getOrDefault(emptyList())
     }
 
@@ -345,10 +468,14 @@ fun ToreadApp() {
                         ToreadScreen.Settings -> SettingsPage(
                             settingsRepository = settingsRepository,
                             dynamicColorEnabled = dynamicColorEnabled,
-                            defaultServerBaseUrl = defaultServerBaseUrl,
+                            autoSyncEnabled = autoSyncEnabled,
                             onDynamicColorEnabledChange = { enabled ->
                                 settingsRepository?.setDynamicColorEnabled(enabled)
                                 dynamicColorEnabled = enabled
+                            },
+                            onAutoSyncEnabledChange = { enabled ->
+                                settingsRepository?.setAutoSyncEnabled(enabled)
+                                autoSyncEnabled = enabled
                             },
                             onBack = {
                                 refreshKey++
@@ -362,8 +489,20 @@ fun ToreadApp() {
                                     screen = ToreadScreen.Auth
                                 }
                             },
+                            onClearCache = {
+                                showAppMessage(ToreadStrings.NoSafeCacheToClear)
+                            },
                         )
                     }
+                }
+                val offlineState = serverConnectionState as? ServerConnectionState.Offline
+                if (offlineState != null && !isReaderScreen) {
+                    ServerConnectionOfflineBanner(
+                        state = offlineState,
+                        modifier = Modifier
+                            .align(Alignment.BottomCenter)
+                            .padding(horizontal = 16.dp, vertical = 72.dp),
+                    )
                 }
                 SnackbarHost(
                     hostState = snackbarHostState,
@@ -376,12 +515,47 @@ fun ToreadApp() {
     }
 }
 
+@Composable
+private fun ServerConnectionOfflineBanner(
+    state: ServerConnectionState.Offline,
+    modifier: Modifier = Modifier,
+) {
+    Surface(
+        modifier = modifier
+            .widthIn(max = 680.dp)
+            .fillMaxWidth(),
+        shape = RoundedCornerShape(14.dp),
+        color = MaterialTheme.colorScheme.errorContainer,
+        tonalElevation = 2.dp,
+        shadowElevation = 2.dp,
+    ) {
+        Text(
+            text = ToreadStrings.offlineBanner(state.reason),
+            color = MaterialTheme.colorScheme.onErrorContainer,
+            modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp),
+        )
+    }
+}
+
 private fun appContentPadding(platformKind: PlatformKind, isReaderScreen: Boolean): Modifier =
     when {
         isReaderScreen -> Modifier
         platformKind == PlatformKind.Desktop -> Modifier.padding(24.dp)
         else -> Modifier.safeContentPadding()
     }
+
+private fun String?.shouldTriggerServerCheck(): Boolean {
+    val message = this?.trim().orEmpty()
+    if (message.isBlank()) return false
+    return !message.contains("access token", ignoreCase = true) &&
+        !message.contains("登录", ignoreCase = true) &&
+        !message.contains("token", ignoreCase = true)
+}
+
+private fun AuthClientResult.Failure.isInvalidRefreshToken(): Boolean =
+    error == "invalid_refresh_token" ||
+        message.contains("refresh token 无效", ignoreCase = true) ||
+        message.contains("refresh token", ignoreCase = true) && message.contains("过期")
 
 private data class RemoteProgressPullSummary(
     val checked: Int = 0,

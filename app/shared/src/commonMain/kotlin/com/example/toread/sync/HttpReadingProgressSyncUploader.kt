@@ -3,6 +3,7 @@ package com.example.toread.sync
 import com.example.toread.progress.ReadingProgressSyncPayload
 import com.example.toread.reader.BookLocatorJson
 import io.ktor.client.HttpClient
+import io.ktor.client.plugins.HttpTimeout
 import io.ktor.client.plugins.contentnegotiation.ContentNegotiation
 import io.ktor.client.request.bearerAuth
 import io.ktor.client.request.header
@@ -23,6 +24,11 @@ class HttpReadingProgressSyncUploader(
     private val baseUrlProvider: () -> String,
     private val accessTokenProvider: suspend () -> String?,
     private val client: HttpClient = HttpClient {
+        install(HttpTimeout) {
+            connectTimeoutMillis = SyncHttpTimeoutMillis
+            requestTimeoutMillis = SyncHttpTimeoutMillis
+            socketTimeoutMillis = SyncHttpTimeoutMillis
+        }
         install(ContentNegotiation) {
             json(SyncHttpJson)
         }
@@ -80,3 +86,5 @@ private val SyncHttpJson = Json {
     ignoreUnknownKeys = true
     explicitNulls = false
 }
+
+private const val SyncHttpTimeoutMillis = 3_000L
