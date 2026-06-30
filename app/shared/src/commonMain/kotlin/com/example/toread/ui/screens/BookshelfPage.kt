@@ -148,12 +148,13 @@ internal fun BookshelfPage(
             continueBook?.let { book ->
                 ContinueReadingSection(book = book, onOpenBook = onOpenBook)
             }
-            Text(
-                text = ToreadStrings.BooksSection,
-                color = MaterialTheme.colorScheme.onSurface,
-                fontSize = 20.sp,
-                fontWeight = FontWeight.SemiBold,
-            )
+//            Text(
+//                text = ToreadStrings.BooksSection,
+//                color = MaterialTheme.colorScheme.onSurface,
+//                fontSize = 20.sp,
+//                fontWeight = FontWeight.SemiBold,
+//            )
+            SectionTitle(text = ToreadStrings.BooksSection)
             BookshelfFilters(selectedFilter = selectedFilter, onSelectFilter = { selectedFilter = it })
 
             if (visibleBooks.isEmpty()) {
@@ -317,15 +318,15 @@ private fun ContinueReadingSection(book: BookshelfBook, onOpenBook: (BookshelfBo
                         Text(ToreadStrings.lastReadAt(book.lastReadLabel()), color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 13.sp)
                     }
                 }
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.End,
-                ) {
-                    ReaderActionButton(
-                        text = ToreadStrings.ContinueReading,
-                        onClick = { onOpenBook(book) },
-                    )
-                }
+//                Row(
+//                    modifier = Modifier.fillMaxWidth(),
+//                    horizontalArrangement = Arrangement.End,
+//                ) {
+//                    ReaderActionButton(
+//                        text = ToreadStrings.ContinueReading,
+//                        onClick = { onOpenBook(book) },
+//                    )
+//                }
             }
         }
     }
@@ -450,15 +451,15 @@ private fun BookCard(book: BookshelfBook, onOpenBook: (BookshelfBook) -> Unit) {
                     SyncStatusLabel(status = book.syncStatus)
                 }
             }
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.End,
-            ) {
-                ReaderActionButton(
-                    text = if (book.progress > 0.0) ToreadStrings.ContinueReading else ToreadStrings.Open,
-                    onClick = { onOpenBook(book) },
-                )
-            }
+//            Row(
+//                modifier = Modifier.fillMaxWidth(),
+//                horizontalArrangement = Arrangement.End,
+//            ) {
+//                ReaderActionButton(
+//                    text = if (book.progress > 0.0) ToreadStrings.ContinueReading else ToreadStrings.Open,
+//                    onClick = { onOpenBook(book) },
+//                )
+//            }
         }
     }
 }

@@ -38,7 +38,7 @@ object ToreadStrings {
     const val LoginExpired = "登录状态已过期，请重新登录。"
     const val ServerConnectionMonitorUnavailable = "连接监控未初始化"
     const val ServerOfflineSnackbar = "连接服务器失败，当前为离线状态。"
-    const val ServerReconnectedSnackbar = "已重新连接服务器，正在同步本地更改。"
+    const val ServerReconnectedSnackbar = "已重新连接服务器"
     const val RefreshSuccess = "刷新成功"
     const val SyncServiceUnavailable = "同步服务未初始化"
     const val CurrentOffline = "当前为离线状态"
@@ -46,19 +46,19 @@ object ToreadStrings {
     const val NoSafeCacheToClear = "当前没有可安全清理的独立缓存。"
 
     fun refreshAuthFailed(reason: String): String = "刷新登录状态失败：$reason"
-    fun refreshFailed(reason: String): String = "刷新失败：$reason"
+    fun refreshFailed(reason: String): String = "刷新失败"
     fun remoteProgressUpdated(count: Int): String = "刷新成功：已更新 $count 本书的云端进度"
     fun databaseInitFailed(reason: String?): String = failedWithReason("本地数据库初始化失败", reason)
     fun readBookshelfFailed(reason: String?): String = failedWithReason("读取书架失败", reason)
     fun offlineBanner(reason: String): String =
-        "离线状态：阅读和本地保存正常，同步将在恢复连接后继续。${reason.toShortReasonSuffix()}"
+        "离线状态，同步将在恢复连接后继续。"
 
     fun shortReasonSuffix(reason: String): String = reason.toShortReasonSuffix()
 
     // Auth
     const val LoginTitle = "登录 Toread"
     const val RegisterTitle = "注册 Toread"
-    const val AuthDescription = "Toread 是导入型阅读器，只读取你主动选择的本地 EPUB、PDF 和 TXT 文件。"
+    const val AuthDescription = "获得更好的多端同步阅读体验"
     const val EmailLabel = "邮箱"
     const val PasswordLabel = "密码"
     const val EmailPasswordRequired = "请输入邮箱和密码。"
@@ -82,7 +82,7 @@ object ToreadStrings {
     const val NoMatchingBooks = "没有符合条件的书"
     const val NoReadableBooks = "还没有可阅读的书"
     const val TryAnotherSearch = "换个关键词或筛选项试试。"
-    const val EmptyBookshelfHint = "导入 EPUB、PDF 或 TXT 文件后会显示在这里。"
+    const val EmptyBookshelfHint = "导入文件后会显示在这里。"
     const val Synced = "已同步"
     const val SyncFailed = "同步失败"
     const val WaitingSync = "等待同步"

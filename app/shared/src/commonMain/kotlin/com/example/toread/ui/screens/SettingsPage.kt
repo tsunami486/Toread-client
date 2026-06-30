@@ -601,12 +601,12 @@ private fun StorageSettingsContent(
     onAbout: () -> Unit,
 ) {
     Column(verticalArrangement = Arrangement.spacedBy(0.dp)) {
-        SettingsInfoRow(
-            imageVector = Icons.Outlined.Folder,
-            title = ToreadStrings.LocalStorage,
-            trailingText = ToreadStrings.AppPrivateDirectory,
-        )
-        SettingsDivider()
+//        SettingsInfoRow(
+//            imageVector = Icons.Outlined.Folder,
+//            title = ToreadStrings.LocalStorage,
+//            trailingText = ToreadStrings.AppPrivateDirectory,
+//        )
+//        SettingsDivider()
         SettingsActionRow(
             imageVector = Icons.Outlined.DeleteSweep,
             title = ToreadStrings.ClearCache,
