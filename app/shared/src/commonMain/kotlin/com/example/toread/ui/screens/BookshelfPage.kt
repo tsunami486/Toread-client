@@ -5,6 +5,7 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -18,23 +19,33 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.Check
+import androidx.compose.material.icons.filled.KeyboardArrowDown
+import androidx.compose.material.icons.filled.KeyboardArrowUp
+import androidx.compose.material.icons.filled.PriorityHigh
 import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material.icons.automirrored.outlined.ViewList
+import androidx.compose.material.icons.filled.CloudSync
+import androidx.compose.material.icons.filled.Textsms
+import androidx.compose.material.icons.filled.ViewDay
+import androidx.compose.material.icons.outlined.CloudDone
+import androidx.compose.material.icons.outlined.CloudOff
+import androidx.compose.material.icons.outlined.GridView
 import androidx.compose.material.icons.outlined.Search
 import androidx.compose.material.icons.outlined.Settings
-import androidx.compose.material3.Button
-import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material.icons.outlined.ViewDay
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -55,6 +66,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.sp
 import com.example.toread.library.BookshelfBook
 import com.example.toread.platform.CoverImageBytesLoader
@@ -72,9 +84,27 @@ private enum class BookshelfFilter(val label: String) {
     Finished(ToreadStrings.FilterFinished),
 }
 
+private enum class BookshelfLayoutMode {
+    List,
+    Grid,
+}
+
+private sealed interface BookshelfGridEntry {
+    data class Book(val book: BookshelfBook) : BookshelfGridEntry
+    data object Import : BookshelfGridEntry
+}
+
+private data class BookshelfSpacingSpec(
+    val listCardSpacing: Dp,
+    val gridHorizontalSpacing: Dp,
+    val gridVerticalSpacing: Dp,
+    val gridColumnCount: Int,
+)
+
 @Composable
 internal fun BookshelfPage(
     books: List<BookshelfBook>,
+    isDesktop: Boolean = false,
     onImport: () -> Unit,
     onOpenBook: (BookshelfBook) -> Unit,
     onSettings: () -> Unit,
@@ -82,7 +112,26 @@ internal fun BookshelfPage(
     isRefreshing: Boolean = false,
 ) {
     var query by remember { mutableStateOf("") }
+    var searchVisible by remember { mutableStateOf(false) }
     var selectedFilter by remember { mutableStateOf(BookshelfFilter.All) }
+    var layoutMode by remember { mutableStateOf(BookshelfLayoutMode.Grid) }
+    val spacingSpec = remember(isDesktop) {
+        if (isDesktop) {
+            BookshelfSpacingSpec(
+                listCardSpacing = 18.dp,
+                gridHorizontalSpacing = 30.dp,
+                gridVerticalSpacing = 36.dp,
+                gridColumnCount = 5,
+            )
+        } else {
+            BookshelfSpacingSpec(
+                listCardSpacing = 12.dp,
+                gridHorizontalSpacing = 18.dp,
+                gridVerticalSpacing = 22.dp,
+                gridColumnCount = 3,
+            )
+        }
+    }
     val pendingSyncCount = books.count { it.syncStatus.isPendingSync() }
     val failedSyncCount = books.count { it.syncStatus.normalizedSyncStatus() == "failed" }
     val continueBook = remember(books) {
@@ -124,49 +173,97 @@ internal fun BookshelfPage(
                 bookCount = books.size,
                 pendingSyncCount = pendingSyncCount,
                 failedSyncCount = failedSyncCount,
+                searchVisible = searchVisible,
+                onSearchClick = { searchVisible = !searchVisible },
                 onSync = onSync,
                 onSettings = onSettings,
                 isRefreshing = isRefreshing,
             )
-            BookshelfSearchBox(query = query, onQueryChange = { query = it })
-            Button(
-                onClick = onImport,
-                modifier = Modifier
-                .fillMaxWidth()
-                .height(44.dp),
-            shape = RoundedCornerShape(24.dp),
-            colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.primary),
-            ) {
-                Icon(
-                    imageVector = Icons.Default.Add,
-                    contentDescription = null,
-                    modifier = Modifier.size(20.dp),
-                )
-                Spacer(modifier = Modifier.width(8.dp))
-                Text(ToreadStrings.ImportEpubPdfTxt, fontSize = 17.sp, fontWeight = FontWeight.Medium)
+            if (searchVisible) {
+                BookshelfSearchBox(query = query, onQueryChange = { query = it })
             }
             continueBook?.let { book ->
                 ContinueReadingSection(book = book, onOpenBook = onOpenBook)
             }
-//            Text(
-//                text = ToreadStrings.BooksSection,
-//                color = MaterialTheme.colorScheme.onSurface,
-//                fontSize = 20.sp,
-//                fontWeight = FontWeight.SemiBold,
-//            )
-            SectionTitle(text = ToreadStrings.BooksSection)
-            BookshelfFilters(selectedFilter = selectedFilter, onSelectFilter = { selectedFilter = it })
+            BookshelfSectionHeader(
+                selectedFilter = selectedFilter,
+                layoutMode = layoutMode,
+                onSelectFilter = { selectedFilter = it },
+                onToggleLayoutMode = {
+                    layoutMode = when (layoutMode) {
+                        BookshelfLayoutMode.Grid -> BookshelfLayoutMode.List
+                        BookshelfLayoutMode.List -> BookshelfLayoutMode.Grid
+                    }
+                },
+            )
 
             if (visibleBooks.isEmpty()) {
                 EmptyBookshelfCard(
                     hasBooks = books.isNotEmpty(),
+                )
+            }
+            when (layoutMode) {
+                BookshelfLayoutMode.List -> BookshelfList(
+                    books = visibleBooks,
+                    cardSpacing = spacingSpec.listCardSpacing,
+                    onOpenBook = onOpenBook,
                     onImport = onImport,
                 )
-            } else {
-                Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                    visibleBooks.forEach { book ->
-                        BookCard(book = book, onOpenBook = onOpenBook)
+                BookshelfLayoutMode.Grid -> BookshelfGrid(
+                    books = visibleBooks,
+                    spacingSpec = spacingSpec,
+                    onOpenBook = onOpenBook,
+                    onImport = onImport,
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun BookshelfList(
+    books: List<BookshelfBook>,
+    cardSpacing: Dp,
+    onOpenBook: (BookshelfBook) -> Unit,
+    onImport: () -> Unit,
+) {
+    Column(verticalArrangement = Arrangement.spacedBy(cardSpacing)) {
+        books.forEach { book ->
+            BookCard(book = book, onOpenBook = onOpenBook)
+        }
+        AddBookListCard(onImport = onImport)
+    }
+}
+
+@Composable
+private fun BookshelfGrid(
+    books: List<BookshelfBook>,
+    spacingSpec: BookshelfSpacingSpec,
+    onOpenBook: (BookshelfBook) -> Unit,
+    onImport: () -> Unit,
+) {
+    val entries = remember(books) {
+        books.map { BookshelfGridEntry.Book(it) } + BookshelfGridEntry.Import
+    }
+    Column(verticalArrangement = Arrangement.spacedBy(spacingSpec.gridVerticalSpacing)) {
+        entries.chunked(spacingSpec.gridColumnCount).forEach { rowEntries ->
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(spacingSpec.gridHorizontalSpacing),
+            ) {
+                rowEntries.forEach { entry ->
+                    Box(modifier = Modifier.weight(1f)) {
+                        when (entry) {
+                            is BookshelfGridEntry.Book -> GridBookCard(
+                                book = entry.book,
+                                onOpenBook = onOpenBook,
+                            )
+                            BookshelfGridEntry.Import -> AddBookGridCard(onImport = onImport)
+                        }
                     }
+                }
+                repeat(spacingSpec.gridColumnCount - rowEntries.size) {
+                    Spacer(modifier = Modifier.weight(1f))
                 }
             }
         }
@@ -178,6 +275,8 @@ private fun BookshelfHeader(
     bookCount: Int,
     pendingSyncCount: Int,
     failedSyncCount: Int,
+    searchVisible: Boolean,
+    onSearchClick: () -> Unit,
     onSync: () -> Unit,
     onSettings: () -> Unit,
     isRefreshing: Boolean,
@@ -201,6 +300,11 @@ private fun BookshelfHeader(
             RefreshHeaderIconButton(
                 isRefreshing = isRefreshing,
                 onClick = onSync,
+            )
+            HeaderIconButton(
+                imageVector = Icons.Outlined.Search,
+                contentDescription = if (searchVisible) ToreadStrings.HideSearch else ToreadStrings.Search,
+                onClick = onSearchClick,
             )
             HeaderIconButton(
                 imageVector = Icons.Outlined.Settings,
@@ -346,42 +450,74 @@ private fun SectionTitle(text: String) {
 }
 
 @Composable
-private fun BookshelfFilters(
+private fun BookshelfSectionHeader(
     selectedFilter: BookshelfFilter,
+    layoutMode: BookshelfLayoutMode,
     onSelectFilter: (BookshelfFilter) -> Unit,
+    onToggleLayoutMode: () -> Unit,
 ) {
+    var expanded by remember { mutableStateOf(false) }
     Row(
         modifier = Modifier.fillMaxWidth(),
-        horizontalArrangement = Arrangement.spacedBy(10.dp),
+        horizontalArrangement = Arrangement.SpaceBetween,
+        verticalAlignment = Alignment.CenterVertically,
     ) {
-        BookshelfFilter.entries.forEach { filter ->
-            val selected = filter == selectedFilter
-            Box(
-                modifier = Modifier
-                    .clip(RoundedCornerShape(22.dp))
-                    .background(if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.background)
-                    .border(
-                        1.dp,
-                        if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outlineVariant,
-                        RoundedCornerShape(22.dp),
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(6.dp),
+        ) {
+            SectionTitle(text = ToreadStrings.BooksSection)
+            Box {
+                IconButton(
+                    onClick = { expanded = true },
+                    modifier = Modifier.size(32.dp),
+                ) {
+                    val arrows = if (expanded) Icons.Default.KeyboardArrowUp else Icons.Default.KeyboardArrowDown
+                    Icon(
+                        imageVector = arrows,
+                        contentDescription = ToreadStrings.FilterBooks,
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
-                    .clickable { onSelectFilter(filter) }
-                    .padding(horizontal = 20.dp, vertical = 9.dp),
-                contentAlignment = Alignment.Center,
-            ) {
+                }
+                DropdownMenu(
+                    expanded = expanded,
+                    onDismissRequest = { expanded = false },
+                ) {
+                    BookshelfFilter.entries.forEach { filter ->
+                        DropdownMenuItem(
+                            text = { Text(filter.label) },
+                            onClick = {
+                                onSelectFilter(filter)
+                                expanded = false
+                            },
+                        )
+                    }
+                }
+            }
+            if (selectedFilter != BookshelfFilter.All) {
                 Text(
-                    text = filter.label,
-                    color = if (selected) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurfaceVariant,
-                    fontSize = 15.sp,
-                    fontWeight = if (selected) FontWeight.Medium else FontWeight.Normal,
+                    text = selectedFilter.label,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    fontSize = 14.sp,
                 )
             }
         }
+        HeaderIconButton(
+            imageVector = when (layoutMode) {
+                BookshelfLayoutMode.List -> Icons.Outlined.GridView
+                BookshelfLayoutMode.Grid -> Icons.Outlined.ViewDay
+            },
+            contentDescription = when (layoutMode) {
+                BookshelfLayoutMode.List -> ToreadStrings.SwitchToGridView
+                BookshelfLayoutMode.Grid -> ToreadStrings.SwitchToListView
+            },
+            onClick = onToggleLayoutMode,
+        )
     }
 }
 
 @Composable
-private fun EmptyBookshelfCard(hasBooks: Boolean, onImport: () -> Unit) {
+private fun EmptyBookshelfCard(hasBooks: Boolean) {
     Card(
         modifier = Modifier.fillMaxWidth(),
         shape = RoundedCornerShape(20.dp),
@@ -401,13 +537,32 @@ private fun EmptyBookshelfCard(hasBooks: Boolean, onImport: () -> Unit) {
                 if (hasBooks) ToreadStrings.TryAnotherSearch else ToreadStrings.EmptyBookshelfHint,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
-            Button(
-                onClick = onImport,
-                shape = RoundedCornerShape(24.dp),
-                colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.primary),
-            ) {
-                Text(ToreadStrings.ImportBooks)
-            }
+        }
+    }
+}
+
+@Composable
+private fun AddBookListCard(onImport: () -> Unit) {
+    Card(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable { onImport() },
+        shape = RoundedCornerShape(20.dp),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+        elevation = CardDefaults.cardElevation(defaultElevation = 1.dp),
+    ) {
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(116.dp),
+            contentAlignment = Alignment.Center,
+        ) {
+            Icon(
+                imageVector = Icons.Default.Add,
+                contentDescription = ToreadStrings.ImportBooks,
+                tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.42f),
+                modifier = Modifier.size(46.dp),
+            )
         }
     }
 }
@@ -451,21 +606,76 @@ private fun BookCard(book: BookshelfBook, onOpenBook: (BookshelfBook) -> Unit) {
                     SyncStatusLabel(status = book.syncStatus)
                 }
             }
-//            Row(
-//                modifier = Modifier.fillMaxWidth(),
-//                horizontalArrangement = Arrangement.End,
-//            ) {
-//                ReaderActionButton(
-//                    text = if (book.progress > 0.0) ToreadStrings.ContinueReading else ToreadStrings.Open,
-//                    onClick = { onOpenBook(book) },
-//                )
-//            }
         }
     }
 }
 
 @Composable
-private fun BookCover(book: BookshelfBook) {
+private fun GridBookCard(
+    book: BookshelfBook,
+    onOpenBook: (BookshelfBook) -> Unit,
+) {
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable { onOpenBook(book) },
+        verticalArrangement = Arrangement.spacedBy(7.dp),
+    ) {
+        BookCover(
+            book = book,
+            showSyncBadge = true,
+            modifier = Modifier
+                .fillMaxWidth()
+                .aspectRatio(0.72f),
+        )
+        Text(
+            text = book.title,
+            color = MaterialTheme.colorScheme.onSurface,
+            fontSize = 17.sp,
+            fontWeight = FontWeight.SemiBold,
+            lineHeight = 22.sp,
+            maxLines = 2,
+            overflow = TextOverflow.Ellipsis,
+        )
+        Text(
+            text = book.gridMetaLine(),
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            fontSize = 14.sp,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+        )
+    }
+}
+
+@Composable
+private fun AddBookGridCard(onImport: () -> Unit) {
+    Box(
+        modifier = Modifier
+            .fillMaxWidth()
+            .aspectRatio(0.72f)
+            .clip(RoundedCornerShape(8.dp))
+            .background(MaterialTheme.colorScheme.surface)
+            .border(1.dp, MaterialTheme.colorScheme.outlineVariant, RoundedCornerShape(8.dp))
+            .clickable { onImport() },
+        contentAlignment = Alignment.Center,
+    ) {
+        Icon(
+            imageVector = Icons.Default.Add,
+            contentDescription = ToreadStrings.ImportBooks,
+            tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.28f),
+            modifier = Modifier.size(52.dp),
+        )
+    }
+}
+
+@Composable
+private fun BookCover(
+    book: BookshelfBook,
+    modifier: Modifier = Modifier
+        .width(72.dp)
+        .height(104.dp),
+    showSyncBadge: Boolean = false,
+) {
     val format = book.format.uppercase()
     val titleMark = book.title.firstOrNull { it.isLetterOrDigit() }?.toString() ?: format
     val toreadColors = MaterialTheme.toreadColors
@@ -488,9 +698,7 @@ private fun BookCover(book: BookshelfBook) {
     }
 
     Box(
-        modifier = Modifier
-            .width(72.dp)
-            .height(104.dp)
+        modifier = modifier
             .clip(RoundedCornerShape(8.dp))
             .background(coverBrush)
             .border(1.dp, MaterialTheme.colorScheme.outlineVariant, RoundedCornerShape(8.dp)),
@@ -523,6 +731,31 @@ private fun BookCover(book: BookshelfBook) {
                 Text(format, color = Color.White.copy(alpha = 0.85f), fontSize = 12.sp, letterSpacing = 3.sp)
             }
         }
+        if (showSyncBadge) {
+            SyncStatusBadge(
+                status = book.syncStatus,
+                modifier = Modifier
+                    .align(Alignment.BottomEnd),
+            )
+        }
+    }
+}
+
+@Composable
+private fun SyncStatusBadge(status: String, modifier: Modifier = Modifier) {
+    Box(
+        modifier = modifier
+            .size(25.dp)
+            .clip(RoundedCornerShape(6.dp))
+            .background(Color.Black.copy(alpha = 0.26f)),
+        contentAlignment = Alignment.Center,
+    ) {
+        Icon(
+            imageVector = status.syncStatusIcon(),
+            contentDescription = status.displaySyncStatus(),
+            tint = Color.White.copy(alpha = 0.74f),
+            modifier = Modifier.size(16.dp),
+        )
     }
 }
 
@@ -549,21 +782,6 @@ private fun SyncStatusLabel(status: String) {
     Text(text = status.displaySyncStatus(), color = color, fontSize = 14.sp, fontWeight = FontWeight.Medium)
 }
 
-@Composable
-private fun ReaderActionButton(text: String, onClick: () -> Unit) {
-    OutlinedButton(
-        onClick = onClick,
-        modifier = Modifier
-            .height(34.dp)
-            .widthIn(min = 76.dp, max = 104.dp),
-        shape = RoundedCornerShape(20.dp),
-        colors = ButtonDefaults.outlinedButtonColors(contentColor = MaterialTheme.colorScheme.primary),
-        contentPadding = PaddingValues(horizontal = 12.dp, vertical = 0.dp),
-    ) {
-        Text(text, fontSize = 13.sp, fontWeight = FontWeight.Medium, maxLines = 1)
-    }
-}
-
 private fun BookshelfBook.matchesFilter(filter: BookshelfFilter): Boolean =
     when (filter) {
         BookshelfFilter.All -> true
@@ -575,8 +793,18 @@ private fun BookshelfBook.matchesFilter(filter: BookshelfFilter): Boolean =
 private fun BookshelfBook.metaLine(): String =
     "${format.uppercase()} · ${author ?: ToreadStrings.UnknownAuthor}"
 
+private fun BookshelfBook.gridMetaLine(): String =
+    "${progressGridLabel()} · ${format.uppercase()}"
+
 private fun BookshelfBook.progressLabel(): String =
     ToreadStrings.bookProgress(progress)
+
+private fun BookshelfBook.progressGridLabel(): String =
+    when {
+        progress <= 0.0 -> ToreadStrings.Unread
+        progress >= 0.995 -> ToreadStrings.ReadFinished
+        else -> ToreadStrings.bookGridProgress(progress)
+    }
 
 private fun BookshelfBook.lastReadLabel(): String =
     if (lastReadAt.isNullOrBlank()) ToreadStrings.NotStarted else ToreadStrings.JustNow
@@ -596,4 +824,11 @@ private fun String.displaySyncStatus(): String =
         "failed" -> ToreadStrings.SyncFailed
         "pending" -> ToreadStrings.WaitingSync
         else -> ToreadStrings.WaitingSync
+    }
+
+private fun String.syncStatusIcon(): ImageVector =
+    when (normalizedSyncStatus()) {
+        "synced" -> Icons.Outlined.CloudDone
+        "failed" -> Icons.Outlined.CloudOff
+        else -> Icons.Default.CloudSync
     }

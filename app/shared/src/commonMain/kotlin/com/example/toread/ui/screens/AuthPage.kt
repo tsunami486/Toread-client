@@ -91,7 +91,10 @@ internal fun AuthPage(
                                 onAuthenticated()
                             }
                             is AuthClientResult.Failure -> {
-                                authError = result.message
+                                authError = ToreadStrings.safeUserVisibleMessage(
+                                    message = result.message,
+                                    fallback = ToreadStrings.AuthServiceUnavailable,
+                                )
                             }
                             null -> {
                                 authError = ToreadStrings.AuthServiceUnavailable

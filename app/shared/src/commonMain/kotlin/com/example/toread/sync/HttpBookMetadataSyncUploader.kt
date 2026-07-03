@@ -34,12 +34,12 @@ class HttpBookMetadataSyncUploader(
     override suspend fun upload(payload: BookMetadataSyncPayload): BookMetadataUploadResult {
         val baseUrl = baseUrlProvider().trim().trimEnd('/')
         if (baseUrl.isBlank()) {
-            return BookMetadataUploadResult.Unavailable("服务器地址为空")
+            return BookMetadataUploadResult.Unavailable(SyncServiceUnavailableMessage)
         }
 
         val accessToken = accessTokenProvider()?.trim()
             ?.takeIf { it.isNotEmpty() }
-            ?: return BookMetadataUploadResult.Unavailable("缺少 access token，保留同步队列等待登录")
+            ?: return BookMetadataUploadResult.Unavailable(LoginRequiredForSyncMessage)
 
         return runCatching {
             val response = client.put("$baseUrl/books/${payload.bookHash}") {
@@ -54,11 +54,10 @@ class HttpBookMetadataSyncUploader(
                     .toRemoteBookMetadata()
                 BookMetadataUploadResult.Uploaded(book)
             } else {
-                val body = response.bodyAsText().take(240)
-                BookMetadataUploadResult.Failed("HTTP ${response.status.value}: $body")
+                BookMetadataUploadResult.Failed(SyncFailedMessage)
             }
         }.getOrElse { throwable ->
-            BookMetadataUploadResult.Failed(throwable.message ?: throwable::class.simpleName ?: "书籍同步请求失败")
+            BookMetadataUploadResult.Failed(SyncFailedMessage)
         }
     }
 }
@@ -130,3 +129,6 @@ private val BookSyncHttpJson = Json {
 }
 
 private const val BookSyncHttpTimeoutMillis = 3_000L
+private const val SyncServiceUnavailableMessage = "同步服务暂不可用，请稍后重试。"
+private const val LoginRequiredForSyncMessage = "请先登录后再同步。"
+private const val SyncFailedMessage = "同步失败，请稍后重试。"

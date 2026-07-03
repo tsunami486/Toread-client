@@ -8,6 +8,10 @@ import com.example.toread.platform.PlatformFile
 import com.example.toread.platform.PlatformFilePicker
 import com.example.toread.sync.BookMetadataJson
 import com.example.toread.sync.BookMetadataSyncPayload
+import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.put
 
 private val supportedExtensions = setOf("epub", "pdf", "txt")
 
@@ -40,7 +44,7 @@ class BookImportService(
         }
 
         val storedFile = bookFileStorage.copyToPrivateBookDirectory(file, bookHash, extension)
-        val metadata = metadataParser.parse(file, extension)
+        val metadata = metadataParser.parse(file, extension, storedFile.path)
         val coverPath = coverExtractor.extractCover(
             bookFilePath = storedFile.path,
             bookHash = bookHash,
@@ -179,21 +183,41 @@ data class BookMetadata(
 )
 
 interface BookMetadataParser {
-    suspend fun parse(file: PlatformFile, extension: String): BookMetadata
+    suspend fun parse(file: PlatformFile, extension: String, storedFilePath: String): BookMetadata
 }
 
 class BasicBookMetadataParser : BookMetadataParser {
-    override suspend fun parse(file: PlatformFile, extension: String): BookMetadata {
+    private val epubMetadataExtractor = EpubMetadataExtractor()
+
+    override suspend fun parse(file: PlatformFile, extension: String, storedFilePath: String): BookMetadata {
         val fallbackTitle = file.displayName
             .substringBeforeLast('.', missingDelimiterValue = file.displayName)
             .ifBlank { "未命名" }
+        val epubMetadata = epubMetadataExtractor.extract(storedFilePath, extension)
+        val title = epubMetadata?.title?.takeIf { it.isNotBlank() } ?: fallbackTitle
         return BookMetadata(
-            title = fallbackTitle,
-            author = null,
-            metadataJson = """{"source":"local_import","format":"$extension"}""",
+            title = title,
+            author = epubMetadata?.author?.takeIf { it.isNotBlank() },
+            metadataJson = buildLocalImportMetadataJson(extension, epubMetadata),
         )
     }
 }
+
+private val importMetadataJson = Json { encodeDefaults = true }
+
+internal fun buildLocalImportMetadataJson(extension: String, epubMetadata: EpubImportMetadata?): String =
+    importMetadataJson.encodeToString(
+        JsonObject.serializer(),
+        buildJsonObject {
+            put("source", "local_import")
+            put("format", extension)
+            if (epubMetadata != null) {
+                put("metadata_source", "epub_opf")
+                epubMetadata.title?.takeIf { it.isNotBlank() }?.let { put("epub_title", it) }
+                epubMetadata.author?.takeIf { it.isNotBlank() }?.let { put("epub_author", it) }
+            }
+        },
+    )
 
 expect class PlatformImportClock() : ImportClock
 

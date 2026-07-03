@@ -144,6 +144,15 @@ SET cover_path = ?,
     updated_at = ?
 WHERE book_hash = ?;
 
+updateBookMetadata:
+UPDATE local_books
+SET title = ?,
+    author = ?,
+    metadata_json = ?,
+    sync_status = ?,
+    updated_at = ?
+WHERE book_hash = ?;
+
 updateBookLastReadAt:
 UPDATE local_books
 SET last_read_at = ?,

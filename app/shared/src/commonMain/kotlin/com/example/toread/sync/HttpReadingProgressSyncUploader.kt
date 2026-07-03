@@ -37,12 +37,12 @@ class HttpReadingProgressSyncUploader(
     override suspend fun upload(payload: ReadingProgressSyncPayload): SyncUploadResult {
         val baseUrl = baseUrlProvider().trim().trimEnd('/')
         if (baseUrl.isBlank()) {
-            return SyncUploadResult.Unavailable("服务器地址为空")
+            return SyncUploadResult.Unavailable(SyncServiceUnavailableMessage)
         }
 
         val accessToken = accessTokenProvider()?.trim()
             ?.takeIf { it.isNotEmpty() }
-            ?: return SyncUploadResult.Unavailable("缺少 access token，保留同步队列等待登录")
+            ?: return SyncUploadResult.Unavailable(LoginRequiredForSyncMessage)
 
         return runCatching {
             val response = client.put("$baseUrl/progress/${payload.bookHash}") {
@@ -57,11 +57,10 @@ class HttpReadingProgressSyncUploader(
                     .toRemoteReadingProgress()
                 SyncUploadResult.Uploaded(progress)
             } else {
-                val body = response.bodyAsText().take(240)
-                SyncUploadResult.Failed("HTTP ${response.status.value}: $body")
+                SyncUploadResult.Failed(SyncFailedMessage)
             }
         }.getOrElse { throwable ->
-            SyncUploadResult.Failed(throwable.message ?: throwable::class.simpleName ?: "同步请求失败")
+            SyncUploadResult.Failed(SyncFailedMessage)
         }
     }
 }
@@ -88,3 +87,6 @@ private val SyncHttpJson = Json {
 }
 
 private const val SyncHttpTimeoutMillis = 3_000L
+private const val SyncServiceUnavailableMessage = "同步服务暂不可用，请稍后重试。"
+private const val LoginRequiredForSyncMessage = "请先登录后再同步。"
+private const val SyncFailedMessage = "同步失败，请稍后重试。"

@@ -92,7 +92,7 @@ fun ToreadApp() {
     fun showAppMessage(message: String) {
         appScope.launch {
             snackbarHostState.currentSnackbarData?.dismiss()
-            snackbarHostState.showSnackbar(message)
+            snackbarHostState.showSnackbar(ToreadStrings.safeUserVisibleMessage(message))
         }
     }
 
@@ -291,6 +291,7 @@ fun ToreadApp() {
         appScope.launch {
             try {
                 bookshelfRepository?.refreshMissingEpubCovers()
+                bookshelfRepository?.refreshMissingEpubMetadata()
                 bookshelfRepository?.ensurePendingBookMetadataQueued()
                 val summary = syncQueueProcessor?.flushPending(limit = Int.MAX_VALUE)
                 val remoteSummary = pullRemoteProgressForBooks()
@@ -313,7 +314,7 @@ fun ToreadApp() {
             } catch (throwable: Throwable) {
                 serverConnectionMonitor?.triggerCheck(source)
                 if (showResult) {
-                    showAppMessage(ToreadStrings.refreshFailed(throwable.message ?: ToreadStrings.UnknownError))
+                    showAppMessage(ToreadStrings.refreshFailed(ToreadStrings.RefreshUnexpectedFailure))
                 }
             } finally {
                 syncRunning = false
@@ -393,6 +394,18 @@ fun ToreadApp() {
         }
     }
 
+    LaunchedEffect(bookshelfRepository) {
+        val repository = bookshelfRepository ?: return@LaunchedEffect
+        val repaired = runCatching {
+            val updated = repository.refreshMissingEpubMetadata()
+            if (updated > 0) repository.ensurePendingBookMetadataQueued()
+            updated
+        }
+            .onFailure { showAppMessage(ToreadStrings.readBookshelfFailed(it.message)) }
+            .getOrDefault(0)
+        if (repaired > 0) refreshKey++
+    }
+
     LaunchedEffect(bookshelfRepository, refreshKey) {
         books = runCatching { bookshelfRepository?.listBooks().orEmpty() }
             .onFailure { showAppMessage(ToreadStrings.readBookshelfFailed(it.message)) }
@@ -433,6 +446,7 @@ fun ToreadApp() {
                         )
                         ToreadScreen.Bookshelf -> BookshelfPage(
                             books = books,
+                            isDesktop = platform.kind == PlatformKind.Desktop,
                             onImport = { screen = ToreadScreen.Import },
                             onOpenBook = { book ->
                                 selectedBook = book

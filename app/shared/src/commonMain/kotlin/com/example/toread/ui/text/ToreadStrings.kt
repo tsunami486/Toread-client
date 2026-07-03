@@ -32,6 +32,15 @@ object ToreadStrings {
     fun failedWithReason(prefix: String, reason: String?): String =
         "$prefix：${reason?.takeIf { it.isNotBlank() } ?: UnknownError}"
 
+    fun safeUserVisibleMessage(
+        message: String?,
+        fallback: String = RefreshUnexpectedFailure,
+    ): String {
+        val text = message?.trim().orEmpty()
+        if (text.isBlank()) return fallback
+        return if (text.containsTechnicalEndpointDetail()) fallback else text
+    }
+
     // App
     const val RemoteProgressSourceUnavailable = "远端进度服务未初始化"
     const val LocalProgressServiceUnavailable = "本地进度服务未初始化"
@@ -43,6 +52,7 @@ object ToreadStrings {
     const val SyncServiceUnavailable = "同步服务未初始化"
     const val CurrentOffline = "当前为离线状态"
     const val RemoteProgressFetchFailed = "云端进度获取失败"
+    const val RefreshUnexpectedFailure = "操作未完成，请稍后重试。"
     const val NoSafeCacheToClear = "当前没有可安全清理的独立缓存。"
 
     fun refreshAuthFailed(reason: String): String = "刷新登录状态失败：$reason"
@@ -90,6 +100,12 @@ object ToreadStrings {
     const val FilterReading = "在读"
     const val FilterUnread = "未读"
     const val FilterFinished = "已读"
+    const val HideSearch = "收起搜索"
+    const val FilterBooks = "筛选书籍"
+    const val SwitchToGridView = "切换为网格模式"
+    const val SwitchToListView = "切换为列表模式"
+    const val Unread = "未读"
+    const val ReadFinished = "已读完"
 
     fun pendingSyncItems(count: Int): String = "$count 项等待同步"
     fun failedSyncItems(count: Int): String = "$count 项同步失败"
@@ -104,6 +120,7 @@ object ToreadStrings {
 
     fun lastReadAt(label: String): String = "上次阅读：$label"
     fun bookProgress(progress: Double): String = "已读 ${(progress.coerceIn(0.0, 1.0) * 100).roundToInt()}%"
+    fun bookGridProgress(progress: Double): String = "${(progress.coerceIn(0.0, 1.0) * 1000).roundToInt() / 10.0}%"
     fun bookCoverContentDescription(title: String): String = "$title 封面"
 
     // Import
@@ -178,4 +195,26 @@ private fun String.toShortReasonSuffix(): String {
     val reason = trim()
     if (reason.isBlank()) return ""
     return " 原因：${reason.take(80)}"
+}
+
+private fun String.containsTechnicalEndpointDetail(): Boolean {
+    val text = lowercase()
+    return listOf(
+        "http://",
+        "https://",
+        "localhost",
+        "10.0.2.2",
+        ":8080",
+        "/health",
+        "/auth",
+        "/books",
+        "/progress",
+        "/bookmarks",
+        "/notes",
+        "server_base_url",
+        "baseurl",
+        "serverbaseurl",
+        "http ",
+        "http:",
+    ).any { marker -> marker in text }
 }

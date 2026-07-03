@@ -53,7 +53,7 @@ class AuthClient(
     suspend fun checkServerConnection(): ServerConnectionResult {
         val baseUrl = baseUrlProvider().trim().trimEnd('/')
         if (baseUrl.isBlank()) {
-            return ServerConnectionResult.Failure("服务器地址为空")
+            return ServerConnectionResult.Failure(NetworkServiceUnavailableMessage)
         }
 
         return runCatching {
@@ -61,10 +61,10 @@ class AuthClient(
             if (response.status.isSuccess()) {
                 ServerConnectionResult.Success
             } else {
-                ServerConnectionResult.Failure("HTTP ${response.status.value}")
+                ServerConnectionResult.Failure(NetworkServiceUnavailableMessage)
             }
         }.getOrElse { throwable ->
-            ServerConnectionResult.Failure(throwable.message ?: throwable::class.simpleName ?: "连接服务器失败")
+            ServerConnectionResult.Failure(NetworkServiceUnavailableMessage)
         }
     }
 
@@ -74,7 +74,7 @@ class AuthClient(
     ): AuthClientResult {
         val baseUrl = baseUrlProvider().trim().trimEnd('/')
         if (baseUrl.isBlank()) {
-            return AuthClientResult.Failure("服务器地址为空")
+            return AuthClientResult.Failure(AuthServiceUnavailableMessage)
         }
 
         return runCatching {
@@ -100,7 +100,7 @@ class AuthClient(
                 ),
             )
         }.getOrElse { throwable ->
-            AuthClientResult.Failure(throwable.message ?: throwable::class.simpleName ?: "认证请求失败")
+            AuthClientResult.Failure(AuthServiceUnavailableMessage)
         }
     }
 }
@@ -190,9 +190,19 @@ private suspend fun io.ktor.client.statement.HttpResponse.errorDetails(): AuthEr
     }.getOrNull()
     return AuthErrorDetails(
         error = parsed?.error,
-        message = parsed?.message ?: "HTTP ${status.value}: ${body.take(240)}",
+        message = parsed.toUserMessage(),
     )
 }
+
+private fun ErrorResponse?.toUserMessage(): String =
+    when (this?.error) {
+        "invalid_request" -> message.takeIf { it.isNotBlank() } ?: AuthServiceUnavailableMessage
+        "email_exists" -> "该邮箱已经注册"
+        "invalid_credentials" -> "邮箱或密码不正确"
+        "invalid_refresh_token" -> "登录状态已过期，请重新登录。"
+        "unauthorized" -> "登录状态无效，请重新登录。"
+        else -> AuthServiceUnavailableMessage
+    }
 
 private val AuthHttpJson = Json {
     encodeDefaults = true
@@ -201,3 +211,5 @@ private val AuthHttpJson = Json {
 }
 
 private const val AuthHttpTimeoutMillis = 3_000L
+private const val NetworkServiceUnavailableMessage = "网络服务暂不可用，请稍后重试。"
+private const val AuthServiceUnavailableMessage = "登录服务暂不可用，请稍后重试。"

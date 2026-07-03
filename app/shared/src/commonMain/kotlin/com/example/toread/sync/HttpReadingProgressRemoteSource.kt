@@ -34,12 +34,12 @@ class HttpReadingProgressRemoteSource(
     override suspend fun fetch(bookHash: String): RemoteProgressFetchResult {
         val baseUrl = baseUrlProvider().trim().trimEnd('/')
         if (baseUrl.isBlank()) {
-            return RemoteProgressFetchResult.Unavailable("服务器地址为空")
+            return RemoteProgressFetchResult.Unavailable(RemoteProgressUnavailableMessage)
         }
 
         val accessToken = accessTokenProvider()?.trim()
             ?.takeIf { it.isNotEmpty() }
-            ?: return RemoteProgressFetchResult.Unavailable("缺少 access token")
+            ?: return RemoteProgressFetchResult.Unavailable(LoginRequiredForSyncMessage)
 
         return runCatching {
             val response = client.get("$baseUrl/progress/$bookHash") {
@@ -52,12 +52,10 @@ class HttpReadingProgressRemoteSource(
                     val progress = RemoteProgressJson.decodeFromString(ProgressResponse.serializer(), body)
                     RemoteProgressFetchResult.Found(progress.toRemoteReadingProgress())
                 }
-                else -> RemoteProgressFetchResult.Failed(
-                    "HTTP ${response.status.value}: ${response.bodyAsText().take(240)}",
-                )
+                else -> RemoteProgressFetchResult.Failed(RemoteProgressFetchFailedMessage)
             }
         }.getOrElse { throwable ->
-            RemoteProgressFetchResult.Failed(throwable.message ?: throwable::class.simpleName ?: "远端进度请求失败")
+            RemoteProgressFetchResult.Failed(RemoteProgressFetchFailedMessage)
         }
     }
 }
@@ -108,3 +106,6 @@ private val RemoteProgressJson = Json {
 }
 
 private const val RemoteProgressHttpTimeoutMillis = 3_000L
+private const val RemoteProgressUnavailableMessage = "云端进度暂不可用，请稍后重试。"
+private const val RemoteProgressFetchFailedMessage = "云端进度获取失败，请稍后重试。"
+private const val LoginRequiredForSyncMessage = "请先登录后再同步。"

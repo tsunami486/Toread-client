@@ -2,6 +2,8 @@ package com.example.toread.library
 
 import com.example.toread.database.ToreadDatabase
 import com.example.toread.importing.BookCoverExtractor
+import com.example.toread.importing.EpubMetadataExtractor
+import com.example.toread.importing.buildLocalImportMetadataJson
 import com.example.toread.progress.PlatformProgressClock
 import com.example.toread.progress.ProgressClock
 import com.example.toread.reader.BookLocator
@@ -12,6 +14,7 @@ import com.example.toread.sync.BookMetadataSyncPayload
 class BookshelfRepository(
     private val database: ToreadDatabase,
     private val coverExtractor: BookCoverExtractor = BookCoverExtractor(),
+    private val epubMetadataExtractor: EpubMetadataExtractor = EpubMetadataExtractor(),
     private val clock: ProgressClock = PlatformProgressClock(),
 ) {
     fun listBooks(): List<BookshelfBook> =
@@ -55,6 +58,29 @@ class BookshelfRepository(
                     )
                     updated++
                 }
+            }
+        return updated
+    }
+
+    suspend fun refreshMissingEpubMetadata(): Int {
+        val books = database.toreadDatabaseQueries.selectAllBooks().executeAsList()
+        var updated = 0
+        books
+            .filter { it.format.equals("epub", ignoreCase = true) && it.author.isNullOrBlank() }
+            .forEach { book ->
+                val metadata = epubMetadataExtractor.extract(book.file_path, book.format) ?: return@forEach
+                val title = metadata.title?.takeIf { it.isNotBlank() } ?: book.title
+                val author = metadata.author?.takeIf { it.isNotBlank() } ?: return@forEach
+                val now = clock.nowIsoString()
+                database.toreadDatabaseQueries.updateBookMetadata(
+                    title = title,
+                    author = author,
+                    metadata_json = buildLocalImportMetadataJson(book.format, metadata),
+                    sync_status = "pending",
+                    updated_at = now,
+                    book_hash = book.book_hash,
+                )
+                updated++
             }
         return updated
     }
