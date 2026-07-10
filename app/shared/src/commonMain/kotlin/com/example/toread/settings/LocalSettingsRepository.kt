@@ -45,6 +45,13 @@ class LocalSettingsRepository(
             ?.toBooleanStrictOrNull()
             ?: true
 
+    fun bookshelfLayoutMode(): String? =
+        database.toreadDatabaseQueries
+            .getSetting(BookshelfLayoutModeKey)
+            .executeAsOneOrNull()
+            ?.value_
+            ?.takeIf { it.isNotBlank() }
+
     fun serverBaseUrl(defaultValue: String): String =
         database.toreadDatabaseQueries
             .getSetting(ServerBaseUrlKey)
@@ -63,6 +70,10 @@ class LocalSettingsRepository(
 
     fun setAutoSyncEnabled(enabled: Boolean) {
         saveSetting(AutoSyncKey, enabled.toString())
+    }
+
+    fun setBookshelfLayoutMode(value: String) {
+        saveSetting(BookshelfLayoutModeKey, value)
     }
 
     fun setLoggedIn(email: String?) {
@@ -103,6 +114,7 @@ class LocalSettingsRepository(
         const val RefreshTokenKey = "refresh_token"
         const val DynamicColorKey = "dynamic_color_enabled"
         const val AutoSyncKey = "auto_sync_enabled"
+        const val BookshelfLayoutModeKey = "bookshelf_layout_mode"
         const val ServerBaseUrlKey = "server_base_url"
     }
 }

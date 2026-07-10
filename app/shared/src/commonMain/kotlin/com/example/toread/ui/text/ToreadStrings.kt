@@ -102,6 +102,13 @@ object ToreadStrings {
     const val FilterFinished = "已读"
     const val HideSearch = "收起搜索"
     const val FilterBooks = "筛选书籍"
+    const val SortBooks = "排序"
+    const val SortRecentRead = "最近阅读"
+    const val SortTitle = "书名"
+    const val SortAuthor = "作者"
+    const val SortProgress = "阅读进度"
+    const val SortFormat = "文件格式"
+    const val SortFileSize = "文件大小"
     const val SwitchToGridView = "切换为网格模式"
     const val SwitchToListView = "切换为列表模式"
     const val Unread = "未读"
@@ -131,8 +138,38 @@ object ToreadStrings {
     const val ChooseLocalFile = "选择本地文件"
     const val ImportStatusTitle = "导入状态"
     const val NoFileSelected = "没有选择文件。"
+    const val ImportHeroTitle = "导入你的本地书籍"
+    const val ImportHeroDescription = "支持 EPUB、PDF、TXT等常见电子书格式"
+    const val ImportChooseTitle = "选择本地书籍文件"
+    const val ImportChooseDescription = "支持 EPUB、PDF、TXT等常见电子书格式"
+    const val ImportChooseHint = "也可从其他app分享文件到本应用"
+    const val ImportWaitingTitle = "等待选择文件"
+    const val ImportWaitingDescription = "请选择一个本地电子书文件。"
+    const val ImportingTitle = "正在导入本地书籍"
+    const val ImportingDescription = "正在解析文件并生成书籍信息..."
+    const val ImportNoSelectionTitle = "未选择文件"
+    const val ImportNoSelectionDescription = "你还没有选择任何文件。"
+    const val ImportSuccessTitle = "导入成功"
+    const val ImportDuplicateTitle = "书籍已存在"
+    const val ImportFailedTitle = "导入失败"
+    const val ImportFailedGeneric = "暂不支持该文件格式，或文件可能已损坏。"
+    const val ImportServiceUnavailable = "导入服务暂不可用，请稍后重试。"
+    const val ImportingAction = "正在导入..."
+    const val RechooseLocalFile = "重新选择"
+    const val ContinueChooseFile = "继续选择"
+    const val ImportTipTitle = "提示"
+    const val ImportTipDescription = "请确保你拥有导入文件的合法使用权。本应用仅提供本地阅读和个人同步功能。"
 
     fun importFailed(reason: String?): String = failedWithReason("导入失败", reason)
+    fun importSuccessMessage(title: String?, count: Int): String =
+        if (count == 1 && !title.isNullOrBlank()) "《$title》已加入书架。" else "$count 本书已加入书架。"
+
+    fun importDuplicateMessage(title: String?, count: Int): String =
+        if (count == 1 && !title.isNullOrBlank()) "《$title》已经在你的书架中。" else "$count 本书已经在你的书架中。"
+
+    fun importFailedMessage(reason: String?): String =
+        reason?.takeIf { it.isNotBlank() } ?: ImportFailedGeneric
+
     fun importedSummary(imported: Int, duplicates: Int, failed: Int): String =
         buildString {
             append("导入成功：$imported")

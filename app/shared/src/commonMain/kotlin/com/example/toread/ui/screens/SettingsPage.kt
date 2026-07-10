@@ -21,22 +21,10 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.ArrowBack
-import androidx.compose.material.icons.automirrored.outlined.Logout
-import androidx.compose.material.icons.outlined.AccountCircle
-import androidx.compose.material.icons.outlined.ChevronRight
-import androidx.compose.material.icons.outlined.DeleteSweep
-import androidx.compose.material.icons.outlined.Folder
-import androidx.compose.material.icons.outlined.Info
-import androidx.compose.material.icons.outlined.Palette
-import androidx.compose.material.icons.outlined.Sync
-import androidx.compose.material.icons.outlined.Tune
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
-import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
@@ -52,7 +40,6 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -60,16 +47,19 @@ import androidx.compose.ui.unit.sp
 import com.example.toread.platform.PlatformBackHandler
 import com.example.toread.settings.AuthMode
 import com.example.toread.settings.LocalSettingsRepository
+import com.example.toread.ui.icons.ToreadSymbolIcon
+import com.example.toread.ui.icons.ToreadSymbols
 import com.example.toread.ui.text.ToreadStrings
+import org.jetbrains.compose.resources.DrawableResource
 
 private enum class SettingsSection(
     val title: String,
-    val imageVector: ImageVector,
+    val symbol: DrawableResource,
 ) {
-    Account(ToreadStrings.AccountInfo, Icons.Outlined.AccountCircle),
-    Sync(ToreadStrings.SyncAndNetwork, Icons.Outlined.Sync),
-    Appearance(ToreadStrings.AppearanceAndReading, Icons.Outlined.Palette),
-    Storage(ToreadStrings.StorageAndSystem, Icons.Outlined.Tune),
+    Account(ToreadStrings.AccountInfo, ToreadSymbols.AccountCircle),
+    Sync(ToreadStrings.SyncAndNetwork, ToreadSymbols.Sync),
+    Appearance(ToreadStrings.AppearanceAndReading, ToreadSymbols.Palette),
+    Storage(ToreadStrings.StorageAndSystem, ToreadSymbols.Tune),
 }
 
 private val ExpandedSettingsMinWidth = 900.dp
@@ -192,7 +182,7 @@ private fun SettingsSinglePane(
         )
         SettingsSectionCard(
             title = SettingsSection.Sync.title,
-            imageVector = SettingsSection.Sync.imageVector,
+            symbol = SettingsSection.Sync.symbol,
         ) {
             SyncSettingsContent(
                 autoSyncEnabled = autoSyncEnabled,
@@ -202,7 +192,7 @@ private fun SettingsSinglePane(
         }
         SettingsSectionCard(
             title = SettingsSection.Appearance.title,
-            imageVector = SettingsSection.Appearance.imageVector,
+            symbol = SettingsSection.Appearance.symbol,
         ) {
             AppearanceSettingsContent(
                 dynamicColorEnabled = dynamicColorEnabled,
@@ -212,7 +202,7 @@ private fun SettingsSinglePane(
         }
         SettingsSectionCard(
             title = SettingsSection.Storage.title,
-            imageVector = SettingsSection.Storage.imageVector,
+            symbol = SettingsSection.Storage.symbol,
         ) {
             StorageSettingsContent(
                 onClearCache = onClearCache,
@@ -292,7 +282,7 @@ private fun SettingsSidebar(
             horizontalArrangement = Arrangement.spacedBy(14.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            SectionIcon(imageVector = Icons.Outlined.AccountCircle, modifier = Modifier.size(56.dp))
+            SectionIcon(symbol = ToreadSymbols.AccountCircle, modifier = Modifier.size(56.dp))
             Text(
                 text = accountSubtitle,
                 color = MaterialTheme.colorScheme.onBackground,
@@ -364,8 +354,8 @@ private fun SettingsSidebarItem(
         horizontalArrangement = Arrangement.spacedBy(14.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        Icon(
-            imageVector = section.imageVector,
+        ToreadSymbolIcon(
+            symbol = section.symbol,
             contentDescription = null,
             tint = if (selected) {
                 MaterialTheme.colorScheme.onPrimaryContainer
@@ -420,7 +410,7 @@ private fun SettingsDetailPane(
                 horizontalArrangement = Arrangement.spacedBy(12.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
-                SectionIcon(imageVector = selectedSection.imageVector)
+                SectionIcon(symbol = selectedSection.symbol)
                 Text(
                     text = selectedSection.title,
                     color = MaterialTheme.colorScheme.onSurface,
@@ -466,10 +456,11 @@ private fun SettingsHeader(onBack: () -> Unit) {
             onClick = onBack,
             modifier = Modifier.size(48.dp),
         ) {
-            Icon(
-                imageVector = Icons.AutoMirrored.Filled.ArrowBack,
+            ToreadSymbolIcon(
+                symbol = ToreadSymbols.ArrowBack,
                 contentDescription = ToreadStrings.BackToBookshelf,
                 tint = MaterialTheme.colorScheme.onBackground,
+                autoMirror = true,
             )
         }
         Spacer(modifier = Modifier.width(4.dp))
@@ -491,7 +482,7 @@ private fun AccountInfoCard(
 ) {
     SettingsSectionCard(
         title = ToreadStrings.AccountInfo,
-        imageVector = Icons.Outlined.AccountCircle,
+        symbol = ToreadSymbols.AccountCircle,
     ) {
         AccountInfoContent(
             title = title,
@@ -516,7 +507,7 @@ private fun AccountInfoContent(
             verticalAlignment = Alignment.CenterVertically,
         ) {
             SectionIcon(
-                imageVector = Icons.Outlined.AccountCircle,
+                symbol = ToreadSymbols.AccountCircle,
                 modifier = Modifier.size(72.dp),
             )
             Column(
@@ -549,10 +540,11 @@ private fun AccountInfoContent(
             shape = RoundedCornerShape(24.dp),
             colors = ButtonDefaults.outlinedButtonColors(contentColor = MaterialTheme.colorScheme.primary),
         ) {
-            Icon(
-                imageVector = Icons.AutoMirrored.Outlined.Logout,
+            ToreadSymbolIcon(
+                symbol = ToreadSymbols.Logout,
                 contentDescription = null,
                 modifier = Modifier.size(20.dp),
+                autoMirror = true,
             )
             Spacer(modifier = Modifier.width(10.dp))
             Text(ToreadStrings.LogoutState, fontSize = 16.sp, fontWeight = FontWeight.Medium)
@@ -601,20 +593,14 @@ private fun StorageSettingsContent(
     onAbout: () -> Unit,
 ) {
     Column(verticalArrangement = Arrangement.spacedBy(0.dp)) {
-//        SettingsInfoRow(
-//            imageVector = Icons.Outlined.Folder,
-//            title = ToreadStrings.LocalStorage,
-//            trailingText = ToreadStrings.AppPrivateDirectory,
-//        )
-//        SettingsDivider()
         SettingsActionRow(
-            imageVector = Icons.Outlined.DeleteSweep,
+            symbol = ToreadSymbols.DeleteSweep,
             title = ToreadStrings.ClearCache,
             onClick = onClearCache,
         )
         SettingsDivider()
         SettingsActionRow(
-            imageVector = Icons.Outlined.Info,
+            symbol = ToreadSymbols.Info,
             title = ToreadStrings.About,
             trailingText = ToreadStrings.Version100,
             onClick = onAbout,
@@ -625,7 +611,7 @@ private fun StorageSettingsContent(
 @Composable
 private fun SettingsSectionCard(
     title: String,
-    imageVector: ImageVector,
+    symbol: DrawableResource,
     content: @Composable ColumnScope.() -> Unit,
 ) {
     Card(
@@ -646,7 +632,7 @@ private fun SettingsSectionCard(
                 horizontalArrangement = Arrangement.spacedBy(12.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
-                SectionIcon(imageVector = imageVector)
+                SectionIcon(symbol = symbol)
                 Text(
                     text = title,
                     color = MaterialTheme.colorScheme.onSurface,
@@ -661,7 +647,7 @@ private fun SettingsSectionCard(
 
 @Composable
 private fun SectionIcon(
-    imageVector: ImageVector,
+    symbol: DrawableResource,
     modifier: Modifier = Modifier.size(40.dp),
 ) {
     Box(
@@ -670,8 +656,8 @@ private fun SectionIcon(
             .background(MaterialTheme.colorScheme.primaryContainer),
         contentAlignment = Alignment.Center,
     ) {
-        Icon(
-            imageVector = imageVector,
+        ToreadSymbolIcon(
+            symbol = symbol,
             contentDescription = null,
             tint = MaterialTheme.colorScheme.onPrimaryContainer,
             modifier = Modifier.size(22.dp),
@@ -718,22 +704,22 @@ private fun SettingsSwitchRow(
 
 @Composable
 private fun SettingsInfoRow(
-    imageVector: ImageVector,
+    symbol: DrawableResource,
     title: String,
     trailingText: String,
 ) {
-    SettingsBaseRow(imageVector = imageVector, title = title, trailingText = trailingText)
+    SettingsBaseRow(symbol = symbol, title = title, trailingText = trailingText)
 }
 
 @Composable
 private fun SettingsActionRow(
-    imageVector: ImageVector,
+    symbol: DrawableResource,
     title: String,
     trailingText: String? = null,
     onClick: () -> Unit,
 ) {
     SettingsBaseRow(
-        imageVector = imageVector,
+        symbol = symbol,
         title = title,
         trailingText = trailingText,
         modifier = Modifier.clickable(onClick = onClick),
@@ -743,7 +729,7 @@ private fun SettingsActionRow(
 
 @Composable
 private fun SettingsBaseRow(
-    imageVector: ImageVector,
+    symbol: DrawableResource,
     title: String,
     trailingText: String?,
     modifier: Modifier = Modifier,
@@ -756,8 +742,8 @@ private fun SettingsBaseRow(
         horizontalArrangement = Arrangement.spacedBy(14.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        Icon(
-            imageVector = imageVector,
+        ToreadSymbolIcon(
+            symbol = symbol,
             contentDescription = null,
             tint = MaterialTheme.colorScheme.onSurfaceVariant,
             modifier = Modifier.size(26.dp),
@@ -779,11 +765,12 @@ private fun SettingsBaseRow(
             )
         }
         if (showChevron) {
-            Icon(
-                imageVector = Icons.Outlined.ChevronRight,
+            ToreadSymbolIcon(
+                symbol = ToreadSymbols.ChevronRight,
                 contentDescription = null,
                 tint = MaterialTheme.colorScheme.onSurfaceVariant,
                 modifier = Modifier.size(24.dp),
+                autoMirror = true,
             )
         }
     }

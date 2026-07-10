@@ -23,25 +23,11 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material.icons.automirrored.outlined.Article
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.ArrowBack
-import androidx.compose.material.icons.automirrored.filled.KeyboardArrowLeft
-import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
-import androidx.compose.material.icons.filled.Add
-import androidx.compose.material.icons.filled.Menu
-import androidx.compose.material.icons.filled.Remove
-import androidx.compose.material.icons.outlined.DarkMode
-import androidx.compose.material.icons.outlined.LightMode
-import androidx.compose.material.icons.outlined.Settings
-import androidx.compose.material.icons.outlined.TextFields
-import androidx.compose.material.icons.outlined.ViewColumn
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
-import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
@@ -78,10 +64,13 @@ import com.example.toread.library.BookshelfBook
 import com.example.toread.reader.EpubImageBytesLoader
 import com.example.toread.platform.rememberSystemBarInsets
 import com.example.toread.ui.components.ScreenColumn
+import com.example.toread.ui.icons.ToreadSymbolIcon
+import com.example.toread.ui.icons.ToreadSymbols
 import com.example.toread.ui.text.ToreadStrings
 import com.example.toread.ui.theme.toreadColors
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import org.jetbrains.compose.resources.DrawableResource
 import org.jetbrains.compose.resources.decodeToImageBitmap
 import kotlin.math.roundToInt
 
@@ -145,6 +134,7 @@ internal fun DesktopReaderLayout(
     onGoToPage: (Int) -> Unit,
     onTogglePageMode: () -> Unit,
     onToggleNightMode: () -> Unit,
+    onChapterDrawerClosed: () -> Unit,
 ) {
     val palette = if (isNightMode) DesktopNightReaderPalette else DesktopLightReaderPalette
     val chapterEntries = remember(pages) { pages.readerChapterEntries() }
@@ -152,6 +142,14 @@ internal fun DesktopReaderLayout(
         ?: chapterEntries.lastOrNull { it.pageIndex <= pageIndex }?.chapterOrd
         ?: 0
     var chapterDrawerVisible by remember { mutableStateOf(false) }
+    var chapterDrawerWasVisible by remember { mutableStateOf(false) }
+
+    LaunchedEffect(chapterDrawerVisible) {
+        if (chapterDrawerWasVisible && !chapterDrawerVisible) {
+            onChapterDrawerClosed()
+        }
+        chapterDrawerWasVisible = chapterDrawerVisible
+    }
 
     Box(
         modifier = Modifier
@@ -229,11 +227,12 @@ private fun DesktopReaderTopBar(
         verticalAlignment = Alignment.CenterVertically,
     ) {
         TextButton(onClick = onBack) {
-            Icon(
-                imageVector = Icons.AutoMirrored.Filled.ArrowBack,
+            ToreadSymbolIcon(
+                symbol = ToreadSymbols.ArrowBack,
                 contentDescription = ToreadStrings.BackToBookshelf,
                 tint = palette.toolbarText,
                 modifier = Modifier.size(18.dp),
+                autoMirror = true,
             )
             Text(
                 text = bookTitle,
@@ -243,45 +242,63 @@ private fun DesktopReaderTopBar(
             )
         }
         Row(
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            horizontalArrangement = Arrangement.spacedBy(10.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
             DesktopReaderToolbarButton(
                 label = ToreadStrings.Catalog,
-                imageVector = Icons.Default.Menu,
+                symbol = ToreadSymbols.Menu,
                 palette = palette,
                 onClick = onOpenChapterDrawer,
             )
-            DesktopReaderToolbarButton(
-                label = if (isDoublePage) {
-                    ToreadStrings.SwitchSinglePageReading
-                } else {
-                    ToreadStrings.SwitchDoublePageReading
-                },
-                imageVector = if (isDoublePage) Icons.AutoMirrored.Outlined.Article else Icons.Outlined.ViewColumn,
+            DesktopReaderPageModeButton(
+                isDoublePage = isDoublePage,
                 palette = palette,
                 onClick = onTogglePageMode,
             )
             DesktopReaderToolbarButton(
                 label = if (isNightMode) ToreadStrings.SwitchLightMode else ToreadStrings.SwitchDarkMode,
-                imageVector = if (isNightMode) Icons.Outlined.LightMode else Icons.Outlined.DarkMode,
+                symbol = if (isNightMode) ToreadSymbols.LightMode else ToreadSymbols.DarkMode,
                 palette = palette,
                 onClick = onToggleNightMode,
             )
-            DesktopReaderToolbarButton(label = ToreadStrings.Font, imageVector = Icons.Outlined.TextFields, palette = palette)
-            DesktopReaderToolbarButton(label = ToreadStrings.DecreaseFontSize, imageVector = Icons.Default.Remove, palette = palette)
-            DesktopReaderToolbarButton(label = ToreadStrings.IncreaseFontSize, imageVector = Icons.Default.Add, palette = palette)
+            DesktopReaderToolbarButton(label = ToreadStrings.Font, symbol = ToreadSymbols.TextFields, palette = palette)
+            DesktopReaderToolbarButton(label = ToreadStrings.DecreaseFontSize, symbol = ToreadSymbols.Remove, palette = palette)
+            DesktopReaderToolbarButton(label = ToreadStrings.IncreaseFontSize, symbol = ToreadSymbols.Add, palette = palette)
         }
+    }
+}
+
+@Composable
+private fun DesktopReaderToolbarButton(
+    label: String,
+    symbol: DrawableResource,
+    palette: DesktopReaderPalette,
+    onClick: () -> Unit = {},
+    autoMirror: Boolean = false,
+) {
+    DesktopReaderToolbarButtonFrame(
+        label = label,
+        palette = palette,
+        onClick = onClick,
+    ) {
+        ToreadSymbolIcon(
+            symbol = symbol,
+            contentDescription = label,
+            tint = palette.toolbarText,
+            modifier = Modifier.size(18.dp),
+            autoMirror = autoMirror,
+        )
     }
 }
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun DesktopReaderToolbarButton(
+private fun DesktopReaderToolbarButtonFrame(
     label: String,
-    imageVector: ImageVector,
     palette: DesktopReaderPalette,
-    onClick: () -> Unit = {},
+    onClick: () -> Unit,
+    icon: @Composable () -> Unit,
 ) {
     TooltipBox(
         positionProvider = TooltipDefaults.rememberTooltipPositionProvider(TooltipAnchorPosition.Above),
@@ -296,15 +313,57 @@ private fun DesktopReaderToolbarButton(
             onClick = onClick,
             modifier = Modifier
                 .size(34.dp)
-                .background(palette.controlBackground, RoundedCornerShape(50)),
+                .background(palette.background, RoundedCornerShape(50)),
         ) {
-            Icon(
-                imageVector = imageVector,
-                contentDescription = label,
-                tint = palette.toolbarText,
-                modifier = Modifier.size(18.dp),
-            )
+            icon()
         }
+    }
+}
+
+@Composable
+private fun DesktopReaderToolbarButton(
+    label: String,
+    symbol: ImageVector,
+    palette: DesktopReaderPalette,
+    onClick: () -> Unit = {},
+    autoMirror: Boolean = false,
+) {
+    DesktopReaderToolbarButtonFrame(
+        label = label,
+        palette = palette,
+        onClick = onClick,
+    ) {
+        ToreadSymbolIcon(
+            symbol = symbol,
+            contentDescription = label,
+            tint = palette.toolbarText,
+            modifier = Modifier.size(20.dp),
+            autoMirror = autoMirror,
+        )
+    }
+}
+
+@Composable
+private fun DesktopReaderPageModeButton(
+    isDoublePage: Boolean,
+    palette: DesktopReaderPalette,
+    onClick: () -> Unit,
+) {
+    if (isDoublePage) {
+        DesktopReaderToolbarButton(
+            label = ToreadStrings.SwitchSinglePageReading,
+            symbol = ToreadSymbols.Article,
+            palette = palette,
+            onClick = onClick,
+            autoMirror = true,
+        )
+    } else {
+        DesktopReaderToolbarButton(
+            label = ToreadStrings.SwitchDoublePageReading,
+            symbol = ToreadSymbols.TwoPager,
+            palette = palette,
+            onClick = onClick,
+        )
     }
 }
 
@@ -408,10 +467,11 @@ private fun DesktopReaderBottomBar(
             ),
             modifier = Modifier.align(Alignment.CenterStart),
         ) {
-            Icon(
-                imageVector = Icons.AutoMirrored.Filled.KeyboardArrowLeft,
+            ToreadSymbolIcon(
+                symbol = ToreadSymbols.KeyboardArrowLeft,
                 contentDescription = null,
                 modifier = Modifier.size(16.dp),
+                autoMirror = true,
             )
             Text(ToreadStrings.PreviousPage)
         }
@@ -431,10 +491,11 @@ private fun DesktopReaderBottomBar(
             modifier = Modifier.align(Alignment.CenterEnd),
         ) {
             Text(ToreadStrings.NextPage)
-            Icon(
-                imageVector = Icons.AutoMirrored.Filled.KeyboardArrowRight,
+            ToreadSymbolIcon(
+                symbol = ToreadSymbols.KeyboardArrowRight,
                 contentDescription = null,
                 modifier = Modifier.size(16.dp),
+                autoMirror = true,
             )
         }
     }
@@ -696,9 +757,10 @@ private fun AndroidReaderTopBar(book: BookshelfBook, onBack: () -> Unit) {
         verticalAlignment = Alignment.CenterVertically,
     ) {
         TextButton(onClick = onBack) {
-            Icon(
-                imageVector = Icons.AutoMirrored.Filled.ArrowBack,
+            ToreadSymbolIcon(
+                symbol = ToreadSymbols.ArrowBack,
                 contentDescription = ToreadStrings.BackToBookshelf,
+                autoMirror = true,
             )
         }
         Text(
@@ -738,13 +800,21 @@ private fun BoxScope.AndroidReaderBottomPanel(
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 TextButton(onClick = onPrevious, enabled = canPrevious) {
-                    Icon(imageVector = Icons.AutoMirrored.Filled.KeyboardArrowLeft, contentDescription = null)
+                    ToreadSymbolIcon(
+                        symbol = ToreadSymbols.KeyboardArrowLeft,
+                        contentDescription = null,
+                        autoMirror = true,
+                    )
                     Text(ToreadStrings.PreviousPage)
                 }
                 Text(ToreadStrings.readerPercent(progress))
                 TextButton(onClick = onNext, enabled = canNext) {
                     Text(ToreadStrings.NextPage)
-                    Icon(imageVector = Icons.AutoMirrored.Filled.KeyboardArrowRight, contentDescription = null)
+                    ToreadSymbolIcon(
+                        symbol = ToreadSymbols.KeyboardArrowRight,
+                        contentDescription = null,
+                        autoMirror = true,
+                    )
                 }
             }
             LinearProgressIndicator(
@@ -756,23 +826,23 @@ private fun BoxScope.AndroidReaderBottomPanel(
                 horizontalArrangement = Arrangement.SpaceEvenly,
                 verticalAlignment = Alignment.CenterVertically,
             ) {
-                ReaderPanelButton(label = ToreadStrings.Catalog, imageVector = Icons.Default.Menu, onClick = onOpenChapterList)
-                ReaderPanelButton(label = ToreadStrings.NightMode, imageVector = Icons.Outlined.DarkMode)
-                ReaderPanelButton(label = ToreadStrings.ReaderSettings, imageVector = Icons.Outlined.Settings)
+                ReaderPanelButton(label = ToreadStrings.Catalog, symbol = ToreadSymbols.Menu, onClick = onOpenChapterList)
+                ReaderPanelButton(label = ToreadStrings.NightMode, symbol = ToreadSymbols.DarkMode)
+                ReaderPanelButton(label = ToreadStrings.ReaderSettings, symbol = ToreadSymbols.Settings)
             }
         }
     }
 }
 
 @Composable
-private fun ReaderPanelButton(label: String, imageVector: ImageVector, onClick: () -> Unit = {}) {
+private fun ReaderPanelButton(label: String, symbol: DrawableResource, onClick: () -> Unit = {}) {
     Column(
         modifier = Modifier.clickable(onClick = onClick),
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.spacedBy(4.dp),
     ) {
-        Icon(
-            imageVector = imageVector,
+        ToreadSymbolIcon(
+            symbol = symbol,
             contentDescription = label,
             modifier = Modifier.height(28.dp),
             tint = MaterialTheme.colorScheme.onSurfaceVariant,

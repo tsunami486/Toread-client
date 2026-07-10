@@ -389,6 +389,11 @@ internal fun ReaderPage(
                             onGoToPage = { targetPage -> goToPage(targetPage) },
                             onTogglePageMode = ::toggleDesktopPageMode,
                             onToggleNightMode = { desktopNightModeEnabled = !desktopNightModeEnabled },
+                            onChapterDrawerClosed = {
+                                if (desktopReaderFocusReady) {
+                                    focusRequester.requestFocus()
+                                }
+                            },
                         )
                     } else {
                         AndroidReaderLayout(

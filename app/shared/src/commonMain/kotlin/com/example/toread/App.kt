@@ -49,6 +49,7 @@ import com.example.toread.sync.RemoteProgressFetchResult
 import com.example.toread.sync.SyncRunSummary
 import com.example.toread.sync.SyncQueueProcessor
 import com.example.toread.ui.screens.AuthPage
+import com.example.toread.ui.screens.BookshelfLayoutMode
 import com.example.toread.ui.screens.BookshelfPage
 import com.example.toread.ui.screens.ImportPage
 import com.example.toread.ui.screens.ReaderPage
@@ -83,6 +84,7 @@ fun ToreadApp() {
     var refreshKey by remember { mutableIntStateOf(0) }
     var dynamicColorEnabled by remember { mutableStateOf(false) }
     var autoSyncEnabled by remember { mutableStateOf(true) }
+    var bookshelfLayoutMode by remember { mutableStateOf(BookshelfLayoutMode.Grid) }
     var syncRunning by remember { mutableStateOf(false) }
     var serverConnectionState by remember {
         mutableStateOf<ServerConnectionState>(ServerConnectionState.Checking(startedAt = ""))
@@ -363,6 +365,8 @@ fun ToreadApp() {
     LaunchedEffect(settingsRepository) {
         dynamicColorEnabled = settingsRepository?.dynamicColorEnabled() ?: false
         autoSyncEnabled = settingsRepository?.autoSyncEnabled() ?: true
+        bookshelfLayoutMode = BookshelfLayoutMode.fromStoredValue(settingsRepository?.bookshelfLayoutMode())
+            ?: BookshelfLayoutMode.Grid
     }
 
     LaunchedEffect(serverConnectionState, settingsRepository, authClient, autoSyncEnabled) {
@@ -447,6 +451,11 @@ fun ToreadApp() {
                         ToreadScreen.Bookshelf -> BookshelfPage(
                             books = books,
                             isDesktop = platform.kind == PlatformKind.Desktop,
+                            layoutMode = bookshelfLayoutMode,
+                            onLayoutModeChange = { mode ->
+                                bookshelfLayoutMode = mode
+                                settingsRepository?.setBookshelfLayoutMode(mode.storedValue)
+                            },
                             onImport = { screen = ToreadScreen.Import },
                             onOpenBook = { book ->
                                 selectedBook = book
@@ -514,7 +523,7 @@ fun ToreadApp() {
                     ServerConnectionOfflineBanner(
                         state = offlineState,
                         modifier = Modifier
-                            .align(Alignment.BottomCenter)
+                            .align(Alignment.TopCenter)
                             .padding(horizontal = 16.dp, vertical = 72.dp),
                     )
                 }
