@@ -1,6 +1,10 @@
 package com.example.toread.ui.reader
 
+import com.example.toread.reader.ReaderContentBlock
 import com.example.toread.reader.ReaderDocument
+import com.example.toread.reader.EpubLocator
+import com.example.toread.reader.ReaderFlowChapter
+import com.example.toread.reader.ReaderFlowDocument
 import kotlinx.coroutines.runBlocking
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -161,6 +165,112 @@ class ReaderPaginationAlignmentTest {
         assertEquals(listOf(0, 1, 2), chapters.map { it.chapterOrd })
         assertTrue(chapters.zipWithNext().all { (previous, next) -> previous.pageIndex < next.pageIndex })
         assertTrue(chapters.all { chapter -> pages[chapter.pageIndex].lines.first().isChapterTitle })
+    }
+
+    @Test
+    fun longChapterTitleWrapsAndKeepsFullCatalogTitle() = runBlocking {
+        val fullTitle = "第一章风雪夜归人直到天明仍未停歇"
+        val source = "$fullTitle\n正文继续向前。"
+        val document = ReaderDocument(title = "测试", format = "txt", text = source)
+        val spec = ReaderPaginationSpec(
+            fallbackTitle = "测试",
+            bodyWidthPx = 120,
+            bodyHeightPx = 600,
+            fontPx = 20f,
+            lineHeightPx = 32f,
+            linesPerPage = 12,
+        )
+
+        val pages = document.paginateForReader(spec)
+        val titleLines = pages
+            .flatMap { it.lines }
+            .filter { it.chapterOrd == 0 && it.isChapterTitle }
+
+        assertTrue(titleLines.size > 1)
+        assertEquals(fullTitle, titleLines.joinToString("") { it.text })
+        assertTrue(titleLines.all { it.widthPx <= it.availableWidthPx + 0.5f })
+        assertTrue(titleLines.all { it.firstLineIndentPx == 0f })
+        assertTrue(titleLines.all { !it.shouldJustify && it.extraTokenSpacingPx == 0f })
+        assertTrue(titleLines.all { it.chapterTitle == fullTitle })
+        assertTrue(titleLines.all { kotlin.math.abs(it.lineHeightPx - spec.chapterTitleLineHeightPx) <= 0.5f })
+        assertTrue(titleLines.all { it.contentHeightPx + 0.5f >= spec.chapterTitleFontPx })
+        assertEquals(fullTitle, pages.readerChapterEntries().single().title)
+    }
+
+    @Test
+    fun wrappedEpubChapterTitleDoesNotCaptureFirstBodyLocator() = runBlocking {
+        val fullTitle = "第一章风雪夜归人直到天明仍未停歇"
+        val bodyText = "正文继续向前正文继续向前"
+        val bodyStart = fullTitle.length + 1
+        val href = "chapter.xhtml"
+        val flow = ReaderFlowDocument(
+            chapters = listOf(
+                ReaderFlowChapter(
+                    ord = 0,
+                    href = href,
+                    title = fullTitle,
+                    titleStartOffset = 0,
+                    titleEndOffset = fullTitle.length,
+                    blocks = listOf(
+                        ReaderContentBlock.Text(
+                            chapterOrd = 0,
+                            chapterHref = href,
+                            chapterTitle = fullTitle,
+                            unitIndex = 0,
+                            absoluteStart = bodyStart,
+                            absoluteEnd = bodyStart + bodyText.length,
+                            text = bodyText,
+                        ),
+                    ),
+                ),
+            ),
+        )
+        val document = ReaderDocument(
+            title = "测试",
+            format = "epub",
+            text = "$fullTitle\n$bodyText",
+            flow = flow,
+        )
+        val spec = ReaderPaginationSpec(
+            fallbackTitle = "测试",
+            bodyWidthPx = 120,
+            bodyHeightPx = 64,
+            fontPx = 20f,
+            lineHeightPx = 32f,
+            linesPerPage = 2,
+        )
+
+        val pages = document.paginateForReader(spec)
+        val firstTitlePageIndex = pages.indexOfFirst { page -> page.lines.any { it.isChapterTitle } }
+        val firstBodyPageIndex = pages.indexOfFirst { page -> page.lines.any { !it.isChapterTitle } }
+        val firstTitleLocator = pages[firstTitlePageIndex].lines.first { it.isChapterTitle }.startLocator
+        val firstBodyLocator = pages[firstBodyPageIndex].lines.first { !it.isChapterTitle }.startLocator
+
+        assertTrue(firstBodyPageIndex > firstTitlePageIndex)
+        assertEquals(-1, firstTitleLocator.unitIndex)
+        assertEquals(0, firstBodyLocator.unitIndex)
+        assertEquals(
+            firstTitlePageIndex,
+            EpubLocator(
+                chapterHref = href,
+                chapterIndex = 0,
+                chapterProgress = 0.0,
+                globalProgress = 0.0,
+                unitIndex = firstTitleLocator.unitIndex,
+                textOffset = firstTitleLocator.textOffset,
+            ).toPageIndex(pages),
+        )
+        assertEquals(
+            firstBodyPageIndex,
+            EpubLocator(
+                chapterHref = href,
+                chapterIndex = 0,
+                chapterProgress = 0.0,
+                globalProgress = 0.0,
+                unitIndex = firstBodyLocator.unitIndex,
+                textOffset = firstBodyLocator.textOffset,
+            ).toPageIndex(pages),
+        )
     }
 
     @Test

@@ -52,18 +52,6 @@ class LocalSettingsRepository(
             ?.value_
             ?.takeIf { it.isNotBlank() }
 
-    fun serverBaseUrl(defaultValue: String): String =
-        database.toreadDatabaseQueries
-            .getSetting(ServerBaseUrlKey)
-            .executeAsOneOrNull()
-            ?.value_
-            ?.takeIf { it.isNotBlank() }
-            ?: defaultValue
-
-    fun setServerBaseUrl(value: String) {
-        saveSetting(ServerBaseUrlKey, value.trim())
-    }
-
     fun setDynamicColorEnabled(enabled: Boolean) {
         saveSetting(DynamicColorKey, enabled.toString())
     }
@@ -115,7 +103,6 @@ class LocalSettingsRepository(
         const val DynamicColorKey = "dynamic_color_enabled"
         const val AutoSyncKey = "auto_sync_enabled"
         const val BookshelfLayoutModeKey = "bookshelf_layout_mode"
-        const val ServerBaseUrlKey = "server_base_url"
     }
 }
 

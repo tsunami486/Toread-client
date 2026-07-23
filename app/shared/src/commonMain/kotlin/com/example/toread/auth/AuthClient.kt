@@ -195,9 +195,17 @@ private suspend fun io.ktor.client.statement.HttpResponse.errorDetails(): AuthEr
 }
 
 private fun ErrorResponse?.toUserMessage(): String =
-    when (this?.error) {
-        "invalid_request" -> message.takeIf { it.isNotBlank() } ?: AuthServiceUnavailableMessage
+    authErrorToUserMessage(
+        error = this?.error,
+        serverMessage = this?.message,
+    )
+
+internal fun authErrorToUserMessage(error: String?, serverMessage: String?): String =
+    when (error) {
+        "invalid_request" -> serverMessage?.takeIf { it.isNotBlank() } ?: AuthServiceUnavailableMessage
         "email_exists" -> "该邮箱已经注册"
+        "registration_disabled" -> "当前服务器暂未开放新账号注册"
+        "rate_limited" -> "请求过于频繁，请稍后重试"
         "invalid_credentials" -> "邮箱或密码不正确"
         "invalid_refresh_token" -> "登录状态已过期，请重新登录。"
         "unauthorized" -> "登录状态无效，请重新登录。"

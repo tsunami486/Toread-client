@@ -3,11 +3,17 @@ package com.example.toread.ui.reader
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.Orientation
+import androidx.compose.foundation.gestures.draggable
+import androidx.compose.foundation.gestures.rememberDraggableState
+import androidx.compose.foundation.gestures.scrollBy
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxScope
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.aspectRatio
@@ -15,11 +21,14 @@ import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyListScope
+import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -41,9 +50,11 @@ import androidx.compose.material3.TooltipDefaults
 import androidx.compose.material3.rememberTooltipState
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.snapshotFlow
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -69,6 +80,8 @@ import com.example.toread.ui.icons.ToreadSymbols
 import com.example.toread.ui.text.ToreadStrings
 import com.example.toread.ui.theme.toreadColors
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.flow.filterNotNull
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.withContext
 import org.jetbrains.compose.resources.DrawableResource
 import org.jetbrains.compose.resources.decodeToImageBitmap
@@ -522,7 +535,7 @@ private fun BoxScope.DesktopChapterDrawer(
 
     LaunchedEffect(currentChapterIndex, chapters.size) {
         if (currentChapterIndex >= 0) {
-            chapterListState.animateScrollToItem((currentChapterIndex - 4).coerceAtLeast(0))
+            chapterListState.scrollItemToCenter(currentChapterIndex)
         }
     }
 
@@ -543,13 +556,14 @@ private fun BoxScope.DesktopChapterDrawer(
         Column(
             modifier = Modifier
                 .fillMaxSize()
-                .padding(start = 24.dp, top = 28.dp, end = 24.dp, bottom = 22.dp),
+                .padding(top = 28.dp, bottom = 22.dp),
         ) {
             Text(
                 text = ToreadStrings.Catalog,
                 color = palette.drawerText,
                 fontSize = 25.sp,
                 fontWeight = FontWeight.SemiBold,
+                modifier = Modifier.padding(horizontal = 24.dp),
             )
             Text(
                 text = bookTitle,
@@ -557,7 +571,7 @@ private fun BoxScope.DesktopChapterDrawer(
                 fontSize = 14.sp,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
-                modifier = Modifier.padding(top = 8.dp, bottom = 14.dp),
+                modifier = Modifier.padding(start = 24.dp, top = 8.dp, end = 24.dp, bottom = 14.dp),
             )
             Text(
                 text = ToreadStrings.readChapterSummary(
@@ -566,22 +580,28 @@ private fun BoxScope.DesktopChapterDrawer(
                 ),
                 color = palette.mutedText,
                 fontSize = 14.sp,
-                modifier = Modifier.padding(bottom = 12.dp),
+                modifier = Modifier.padding(start = 24.dp, end = 24.dp, bottom = 12.dp),
             )
-            HorizontalDivider(color = palette.divider)
+            HorizontalDivider(
+                modifier = Modifier.padding(horizontal = 24.dp),
+                color = palette.divider,
+            )
             if (chapters.isEmpty()) {
                 Text(
                     text = ToreadStrings.EmptyChapterList,
                     color = palette.mutedText,
                     fontSize = 16.sp,
-                    modifier = Modifier.padding(top = 24.dp),
+                    modifier = Modifier.padding(start = 24.dp, top = 24.dp, end = 24.dp),
                 )
             } else {
-                LazyColumn(
+                ReaderChapterList(
                     state = chapterListState,
                     modifier = Modifier
                         .weight(1f)
-                        .padding(top = 8.dp),
+                        .fillMaxWidth(),
+                    contentPadding = PaddingValues(start = 24.dp, top = 8.dp, end = 24.dp),
+                    trackColor = palette.divider.copy(alpha = 0.55f),
+                    thumbColor = palette.mutedText.copy(alpha = 0.72f),
                 ) {
                     items(chapters, key = { it.chapterOrd }) { chapter ->
                         DesktopChapterRow(
@@ -860,6 +880,15 @@ private fun BoxScope.AndroidChapterDrawer(
     onSelectChapter: (ReaderChapterEntry) -> Unit,
 ) {
     val bottomInset = rememberSystemBarInsets().bottom
+    val chapterListState = rememberLazyListState()
+    val currentChapterIndex = chapters.indexOfFirst { it.chapterOrd == currentChapterOrd }
+
+    LaunchedEffect(currentChapterIndex, chapters.size) {
+        if (currentChapterIndex >= 0) {
+            chapterListState.scrollItemToCenter(currentChapterIndex)
+        }
+    }
+
     Box(
         modifier = Modifier
             .fillMaxSize()
@@ -876,7 +905,7 @@ private fun BoxScope.AndroidChapterDrawer(
             modifier = Modifier
                 .fillMaxSize()
                 .background(MaterialTheme.colorScheme.surface)
-                .padding(start = 24.dp, top = 10.dp, end = 24.dp, bottom = bottomInset + 12.dp),
+                .padding(top = 10.dp, bottom = bottomInset + 12.dp),
         ) {
             Box(
                 modifier = Modifier
@@ -890,7 +919,7 @@ private fun BoxScope.AndroidChapterDrawer(
                 color = MaterialTheme.colorScheme.onSurface,
                 fontSize = 26.sp,
                 fontWeight = FontWeight.SemiBold,
-                modifier = Modifier.padding(top = 26.dp),
+                modifier = Modifier.padding(start = 24.dp, top = 26.dp, end = 24.dp),
             )
             Text(
                 text = ToreadStrings.readChapterSummary(
@@ -899,17 +928,25 @@ private fun BoxScope.AndroidChapterDrawer(
                 ),
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 fontSize = 17.sp,
-                modifier = Modifier.padding(top = 18.dp, bottom = 14.dp),
+                modifier = Modifier.padding(start = 24.dp, top = 18.dp, end = 24.dp, bottom = 14.dp),
             )
             if (chapters.isEmpty()) {
                 Text(
                     text = ToreadStrings.EmptyChapterList,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     fontSize = 18.sp,
-                    modifier = Modifier.padding(top = 24.dp),
+                    modifier = Modifier.padding(start = 24.dp, top = 24.dp, end = 24.dp),
                 )
             } else {
-                LazyColumn(modifier = Modifier.weight(1f)) {
+                ReaderChapterList(
+                    state = chapterListState,
+                    modifier = Modifier
+                        .weight(1f)
+                        .fillMaxWidth(),
+                    contentPadding = PaddingValues(horizontal = 24.dp),
+                    trackColor = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.62f),
+                    thumbColor = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.62f),
+                ) {
                     items(chapters, key = { it.chapterOrd }) { chapter ->
                         AndroidChapterRow(
                             chapter = chapter,
@@ -919,6 +956,165 @@ private fun BoxScope.AndroidChapterDrawer(
                     }
                 }
             }
+        }
+    }
+}
+
+private suspend fun LazyListState.scrollItemToCenter(index: Int) {
+    scrollToItem(index)
+    val itemInfo = snapshotFlow {
+        layoutInfo.visibleItemsInfo.firstOrNull { it.index == index }
+    }.filterNotNull().first()
+    val viewportCenter = (layoutInfo.viewportStartOffset + layoutInfo.viewportEndOffset) / 2
+    val itemCenter = itemInfo.offset + itemInfo.size / 2
+    scrollBy((itemCenter - viewportCenter).toFloat())
+}
+
+@Composable
+private fun ReaderChapterList(
+    state: LazyListState,
+    contentPadding: PaddingValues,
+    trackColor: Color,
+    thumbColor: Color,
+    modifier: Modifier = Modifier,
+    content: LazyListScope.() -> Unit,
+) {
+    Box(modifier = modifier) {
+        LazyColumn(
+            state = state,
+            modifier = Modifier.fillMaxSize(),
+            contentPadding = contentPadding,
+            content = content,
+        )
+        ReaderChapterScrollbar(
+            state = state,
+            trackColor = trackColor,
+            thumbColor = thumbColor,
+            modifier = Modifier
+                .align(Alignment.CenterEnd)
+                .fillMaxHeight()
+                .width(24.dp),
+        )
+    }
+}
+
+private data class ReaderChapterScrollbarMetrics(
+    val totalItems: Int,
+    val visibleFraction: Float,
+    val scrollFraction: Float,
+    val averageItemHeight: Float,
+    val maxFirstItemPosition: Float,
+)
+
+private fun LazyListState.chapterScrollbarMetrics(): ReaderChapterScrollbarMetrics? {
+    val currentLayoutInfo = layoutInfo
+    val visibleItems = currentLayoutInfo.visibleItemsInfo
+    val totalItems = currentLayoutInfo.totalItemsCount
+    if (totalItems <= 0 || visibleItems.isEmpty() || (!canScrollBackward && !canScrollForward)) {
+        return null
+    }
+
+    val viewportHeight = (currentLayoutInfo.viewportEndOffset - currentLayoutInfo.viewportStartOffset).toFloat()
+    val averageItemHeight = visibleItems.sumOf { it.size }.toFloat() / visibleItems.size
+    val estimatedContentHeight = averageItemHeight * totalItems
+    if (viewportHeight <= 0f || estimatedContentHeight <= viewportHeight) return null
+
+    val visibleItemEstimate = viewportHeight / averageItemHeight
+    val firstVisibleItem = visibleItems.first()
+    val firstItemHiddenFraction = if (firstVisibleItem.size > 0) {
+        ((currentLayoutInfo.viewportStartOffset - firstVisibleItem.offset).toFloat() / firstVisibleItem.size)
+            .coerceIn(0f, 1f)
+    } else {
+        0f
+    }
+    val maxFirstItemPosition = (totalItems - visibleItemEstimate).coerceAtLeast(0f)
+    val estimatedPosition = firstVisibleItem.index + firstItemHiddenFraction
+    val scrollFraction = when {
+        !canScrollBackward -> 0f
+        !canScrollForward -> 1f
+        maxFirstItemPosition <= 0f -> 0f
+        else -> (estimatedPosition / maxFirstItemPosition).coerceIn(0f, 1f)
+    }
+
+    return ReaderChapterScrollbarMetrics(
+        totalItems = totalItems,
+        visibleFraction = (viewportHeight / estimatedContentHeight).coerceIn(0f, 1f),
+        scrollFraction = scrollFraction,
+        averageItemHeight = averageItemHeight,
+        maxFirstItemPosition = maxFirstItemPosition,
+    )
+}
+
+private fun LazyListState.requestChapterScrollFraction(
+    fraction: Float,
+    metrics: ReaderChapterScrollbarMetrics,
+) {
+    val clampedFraction = fraction.coerceIn(0f, 1f)
+    when {
+        clampedFraction <= 0f -> requestScrollToItem(0)
+        clampedFraction >= 1f -> requestScrollToItem(metrics.totalItems - 1)
+        else -> {
+            val targetPosition = metrics.maxFirstItemPosition * clampedFraction
+            val targetIndex = targetPosition.toInt().coerceIn(0, metrics.totalItems - 1)
+            val targetOffset = ((targetPosition - targetIndex) * metrics.averageItemHeight).roundToInt()
+            requestScrollToItem(targetIndex, targetOffset)
+        }
+    }
+}
+
+@Composable
+private fun ReaderChapterScrollbar(
+    state: LazyListState,
+    trackColor: Color,
+    thumbColor: Color,
+    modifier: Modifier = Modifier,
+) {
+    val metrics by remember(state) {
+        derivedStateOf { state.chapterScrollbarMetrics() }
+    }
+    val currentMetrics = metrics ?: return
+    var dragFraction by remember { mutableStateOf(currentMetrics.scrollFraction) }
+
+    BoxWithConstraints(modifier = modifier) {
+        val thumbHeight = (maxHeight * currentMetrics.visibleFraction)
+            .coerceAtLeast(32.dp)
+            .coerceAtMost(maxHeight)
+        val thumbTravel = maxHeight - thumbHeight
+        val thumbOffset = thumbTravel * currentMetrics.scrollFraction
+        val thumbTravelPx = with(LocalDensity.current) { thumbTravel.toPx() }
+        val draggableState = rememberDraggableState { delta ->
+            if (thumbTravelPx > 0f) {
+                dragFraction = (dragFraction + delta / thumbTravelPx).coerceIn(0f, 1f)
+                state.requestChapterScrollFraction(dragFraction, currentMetrics)
+            }
+        }
+
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .draggable(
+                    state = draggableState,
+                    orientation = Orientation.Vertical,
+                    onDragStarted = {
+                        dragFraction = metrics?.scrollFraction ?: currentMetrics.scrollFraction
+                    },
+                ),
+        ) {
+            Box(
+                modifier = Modifier
+                    .align(Alignment.CenterEnd)
+                    .fillMaxHeight()
+                    .width(3.dp)
+                    .background(trackColor, RoundedCornerShape(50)),
+            )
+            Box(
+                modifier = Modifier
+                    .align(Alignment.TopEnd)
+                    .offset(y = thumbOffset)
+                    .width(3.dp)
+                    .height(thumbHeight)
+                    .background(thumbColor, RoundedCornerShape(50)),
+            )
         }
     }
 }

@@ -289,33 +289,50 @@ private fun BookshelfHeader(
 ) {
     val syncSummary = ToreadStrings.syncPendingSummary(pendingSyncCount, failedSyncCount)
 
-    Row(
+    Column(
         modifier = Modifier.fillMaxWidth(),
-        horizontalArrangement = Arrangement.SpaceBetween,
-        verticalAlignment = Alignment.CenterVertically,
+        verticalArrangement = Arrangement.spacedBy(6.dp),
     ) {
-        Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-            Text(ToreadStrings.BookshelfTitle, color = MaterialTheme.colorScheme.onSurface, fontSize = 36.sp, fontWeight = FontWeight.Bold)
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.Bottom,
+        ) {
+            Text(
+                text = ToreadStrings.BookshelfTitle,
+                color = MaterialTheme.colorScheme.onSurface,
+                fontSize = 36.sp,
+                fontWeight = FontWeight.Bold,
+                modifier = Modifier
+                    .weight(1f)
+                    .padding(end = 10.dp),
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+            Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                RefreshHeaderIconButton(
+                    isRefreshing = isRefreshing,
+                    onClick = onSync,
+                )
+                HeaderIconButton(
+                    symbol = ToreadSymbols.Search,
+                    contentDescription = if (searchVisible) ToreadStrings.HideSearch else ToreadStrings.Search,
+                    onClick = onSearchClick,
+                )
+                HeaderIconButton(
+                    symbol = ToreadSymbols.Settings,
+                    contentDescription = ToreadStrings.Settings,
+                    onClick = onSettings,
+                )
+            }
+        }
+        Row(modifier = Modifier.fillMaxWidth()) {
             Text(
                 text = ToreadStrings.bookshelfSummary(bookCount, syncSummary),
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 fontSize = 15.sp,
-            )
-        }
-        Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-            RefreshHeaderIconButton(
-                isRefreshing = isRefreshing,
-                onClick = onSync,
-            )
-            HeaderIconButton(
-                symbol = ToreadSymbols.Search,
-                contentDescription = if (searchVisible) ToreadStrings.HideSearch else ToreadStrings.Search,
-                onClick = onSearchClick,
-            )
-            HeaderIconButton(
-                symbol = ToreadSymbols.Settings,
-                contentDescription = ToreadStrings.Settings,
-                onClick = onSettings,
+                modifier = Modifier.fillMaxWidth(),
+                softWrap = true,
             )
         }
     }

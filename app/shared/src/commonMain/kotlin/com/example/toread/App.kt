@@ -2,11 +2,14 @@ package com.example.toread
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.safeContentPadding
+import androidx.compose.foundation.layout.safeContent
+import androidx.compose.foundation.layout.union
 import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.SnackbarHost
@@ -28,6 +31,7 @@ import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
 import com.example.toread.auth.AuthClient
 import com.example.toread.auth.AuthClientResult
+import com.example.toread.config.ServerBaseUrlConfig
 import com.example.toread.importing.BookImportService
 import com.example.toread.importing.createToreadDatabase
 import com.example.toread.library.BookshelfBook
@@ -106,18 +110,15 @@ fun ToreadApp() {
     val settingsRepository = remember(database) { database?.let { LocalSettingsRepository(it) } }
     val readerContentLoader = remember { ReaderContentLoader() }
     val tokenStore = remember { SecureTokenStore() }
-    val defaultServerBaseUrl = remember(platform.kind) {
-        when (platform.kind) {
-            PlatformKind.Android -> "http://10.0.2.2:8080"
-            PlatformKind.Desktop -> "http://localhost:8080"
-        }
-    }
-    val authClient = remember(settingsRepository, tokenStore, defaultServerBaseUrl) {
-        settingsRepository?.let { repository ->
+    val serverBaseUrl = remember(platform.kind) { ServerBaseUrlConfig.resolve(platform.kind) }
+    val authClient = remember(settingsRepository, tokenStore, serverBaseUrl) {
+        if (settingsRepository != null) {
             AuthClient(
-                baseUrlProvider = { repository.serverBaseUrl(defaultServerBaseUrl) },
+                baseUrlProvider = { serverBaseUrl },
                 tokenStore = tokenStore,
             )
+        } else {
+            null
         }
     }
     val serverConnectionMonitor = remember(appScope, authClient) {
@@ -128,28 +129,34 @@ fun ToreadApp() {
             )
         }
     }
-    val progressSyncUploader = remember(settingsRepository, tokenStore, defaultServerBaseUrl) {
-        settingsRepository?.let { repository ->
+    val progressSyncUploader = remember(settingsRepository, tokenStore, serverBaseUrl) {
+        if (settingsRepository != null) {
             HttpReadingProgressSyncUploader(
-                baseUrlProvider = { repository.serverBaseUrl(defaultServerBaseUrl) },
+                baseUrlProvider = { serverBaseUrl },
                 accessTokenProvider = { tokenStore.getToken() },
             )
+        } else {
+            null
         }
     }
-    val bookMetadataSyncUploader = remember(settingsRepository, tokenStore, defaultServerBaseUrl) {
-        settingsRepository?.let { repository ->
+    val bookMetadataSyncUploader = remember(settingsRepository, tokenStore, serverBaseUrl) {
+        if (settingsRepository != null) {
             HttpBookMetadataSyncUploader(
-                baseUrlProvider = { repository.serverBaseUrl(defaultServerBaseUrl) },
+                baseUrlProvider = { serverBaseUrl },
                 accessTokenProvider = { tokenStore.getToken() },
             )
+        } else {
+            null
         }
     }
-    val remoteProgressSource = remember(settingsRepository, tokenStore, defaultServerBaseUrl) {
-        settingsRepository?.let { repository ->
+    val remoteProgressSource = remember(settingsRepository, tokenStore, serverBaseUrl) {
+        if (settingsRepository != null) {
             HttpReadingProgressRemoteSource(
-                baseUrlProvider = { repository.serverBaseUrl(defaultServerBaseUrl) },
+                baseUrlProvider = { serverBaseUrl },
                 accessTokenProvider = { tokenStore.getToken() },
             )
+        } else {
+            null
         }
     }
     val syncQueueProcessor = remember(database, progressSyncUploader, bookMetadataSyncUploader) {
@@ -519,14 +526,14 @@ fun ToreadApp() {
                     }
                 }
                 val offlineState = serverConnectionState as? ServerConnectionState.Offline
-                if (offlineState != null && !isReaderScreen) {
-                    ServerConnectionOfflineBanner(
-                        state = offlineState,
-                        modifier = Modifier
-                            .align(Alignment.TopCenter)
-                            .padding(horizontal = 16.dp, vertical = 72.dp),
-                    )
-                }
+//                if (offlineState != null && !isReaderScreen) {
+//                    ServerConnectionOfflineBanner(
+//                        state = offlineState,
+//                        modifier = Modifier
+//                            .align(Alignment.TopCenter)
+//                            .padding(horizontal = 16.dp, vertical = 72.dp),
+//                    )
+//                }
                 SnackbarHost(
                     hostState = snackbarHostState,
                     modifier = Modifier
@@ -560,11 +567,16 @@ private fun ServerConnectionOfflineBanner(
     }
 }
 
+@Composable
 private fun appContentPadding(platformKind: PlatformKind, isReaderScreen: Boolean): Modifier =
     when {
         isReaderScreen -> Modifier
-        platformKind == PlatformKind.Desktop -> Modifier.padding(24.dp)
-        else -> Modifier.safeContentPadding()
+        platformKind == PlatformKind.Desktop -> Modifier.padding(horizontal = 24.dp)
+        else -> Modifier.windowInsetsPadding(
+            WindowInsets.safeContent.union(
+                WindowInsets(left = 24.dp, right = 24.dp),
+            ),
+        )
     }
 
 private fun String?.shouldTriggerServerCheck(): Boolean {
