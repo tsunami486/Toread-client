@@ -17,6 +17,7 @@ object ToreadStrings {
     // Common
     const val UnknownError = "未知错误"
     const val BackToBookshelf = "返回书架"
+    const val Close = "关闭"
     const val Search = "搜索"
     const val Refresh = "刷新"
     const val Settings = "设置"
@@ -192,14 +193,64 @@ object ToreadStrings {
     const val ImageUnavailable = "图片无法显示"
     const val SwitchSinglePageReading = "切换单页阅读"
     const val SwitchDoublePageReading = "切换双页阅读"
+    const val SinglePage = "单页"
+    const val DoublePage = "双页"
+    const val LeftToRight = "从左到右"
+    const val RightToLeft = "从右到左"
+    const val CoverAlone = "封面单页"
+    const val CoverPaired = "封面并排"
+    const val LandscapeSinglePage = "横屏：单页"
+    const val LandscapeDoublePage = "横屏：双页"
+    const val OrientationSystem = "方向：跟随系统"
+    const val OrientationPortrait = "方向：竖屏"
+    const val OrientationLandscape = "方向：横屏"
+    const val VolumeKeysOn = "音量键：开"
+    const val VolumeKeysOff = "音量键：关"
+    const val FirstPage = "首页"
+    const val LastPage = "末页"
     const val SwitchLightMode = "切换浅色模式"
     const val SwitchDarkMode = "切换深色模式"
+    const val PdfRendering = "正在渲染 PDF 页面"
+    const val Retry = "重试"
+    const val PdfReaderSettings = "PDF 阅读设置"
+    const val ReadingMode = "阅读模式"
+    const val PdfSpreadSettings = "分页与跨页"
+    const val ScreenOrientation = "屏幕方向"
+    const val ReaderInteraction = "阅读交互"
+    const val ReaderDisplay = "阅读信息"
+    const val RightToLeftReading = "从右向左阅读"
+    const val TapToTurnPages = "点击翻页"
+    const val ReverseTapToTurnPages = "反转点击翻页方向"
+    const val PageAnimation = "翻页动画"
+    const val DoubleTapToZoom = "双击缩放"
+    const val LongPressToZoom = "长按临时放大"
+    const val TurnPagesWithVolumeKeys = "音量键翻页"
+    const val VolumeKeysDefaultOffHint = "仅在阅读页前台生效，默认关闭"
+    const val ShowPageNumber = "显示页码"
+    const val ShowReaderStatusInfo = "显示时间与电量"
+    const val AutoPageTurning = "自动翻页"
+    const val AutoPageTurningOn = "自动翻页中"
+    const val AutoPageTurningInterval = "自动翻页间隔"
+    const val PdfReaderModePagedHorizontal = "横向分页"
+    const val PdfReaderModePagedVertical = "纵向分页"
+    const val PdfReaderModeContinuousVertical = "纵向连续"
 
     fun openBookFailed(reason: String?): String = failedWithReason("打开失败", reason)
     fun readChapterSummary(read: Int, total: Int): String = "已读 $read / 共 $total 章"
     fun chapterPage(index: Int): String = "第 ${index + 1} 页"
+    fun pagePosition(index: Int, total: Int): String = "${index + 1} / $total"
+    fun pdfPageRange(pageIndices: List<Int>, total: Int): String {
+        val first = pageIndices.minOrNull() ?: 0
+        val last = pageIndices.maxOrNull() ?: first
+        return if (first == last) {
+            "${first + 1} / $total"
+        } else {
+            "${first + 1}–${last + 1} / $total"
+        }
+    }
     fun chapterFallback(index: Int): String = "第 ${index + 1} 章"
     fun readerPercent(progress: Double): String = "${(progress.coerceIn(0.0, 1.0) * 100).roundToInt()}%"
+    fun seconds(value: Int): String = "$value 秒"
 
     // Settings
     const val AccountInfo = "账号信息"

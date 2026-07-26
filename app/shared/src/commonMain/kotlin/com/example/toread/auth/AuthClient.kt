@@ -3,6 +3,7 @@ package com.example.toread.auth
 import com.example.toread.platform.SecureTokenStore
 import io.ktor.client.HttpClient
 import io.ktor.client.plugins.HttpTimeout
+import io.ktor.client.plugins.timeout
 import io.ktor.client.call.body
 import io.ktor.client.plugins.contentnegotiation.ContentNegotiation
 import io.ktor.client.request.get
@@ -57,7 +58,13 @@ class AuthClient(
         }
 
         return runCatching {
-            val response = client.get("$baseUrl/health")
+            val response = client.get("$baseUrl/health") {
+                timeout {
+                    connectTimeoutMillis = HealthCheckHttpTimeoutMillis
+                    requestTimeoutMillis = HealthCheckHttpTimeoutMillis
+                    socketTimeoutMillis = HealthCheckHttpTimeoutMillis
+                }
+            }
             if (response.status.isSuccess()) {
                 ServerConnectionResult.Success
             } else {
@@ -219,5 +226,6 @@ private val AuthHttpJson = Json {
 }
 
 private const val AuthHttpTimeoutMillis = 3_000L
+private const val HealthCheckHttpTimeoutMillis = 8_000L
 private const val NetworkServiceUnavailableMessage = "网络服务暂不可用，请稍后重试。"
 private const val AuthServiceUnavailableMessage = "登录服务暂不可用，请稍后重试。"

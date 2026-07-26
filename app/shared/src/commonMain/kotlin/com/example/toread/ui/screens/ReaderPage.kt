@@ -43,6 +43,7 @@ import com.example.toread.progress.ReadingProgressSnapshot
 import com.example.toread.progress.isIsoTimestampAfter
 import com.example.toread.reader.BookLocator
 import com.example.toread.reader.ReaderContentLoader
+import com.example.toread.settings.LocalSettingsRepository
 import com.example.toread.reader.ReaderDocument
 import com.example.toread.reader.TxtLocator
 import com.example.toread.sync.ProgressSyncScheduler
@@ -75,11 +76,28 @@ internal fun ReaderPage(
     progressRepository: ReadingProgressRepository?,
     progressSyncScheduler: ProgressSyncScheduler?,
     remoteProgressSource: ReadingProgressRemoteSource?,
+    settingsRepository: LocalSettingsRepository?,
     progressSaveScope: CoroutineScope,
     readerContentLoader: ReaderContentLoader,
     onProgressSyncFinished: () -> Unit = {},
     onBack: () -> Unit,
 ) {
+    if (book?.format?.equals("pdf", ignoreCase = true) == true) {
+        PdfReaderPage(
+            book = book,
+            platform = platform,
+            bookshelfRepository = bookshelfRepository,
+            progressRepository = progressRepository,
+            progressSyncScheduler = progressSyncScheduler,
+            remoteProgressSource = remoteProgressSource,
+            settingsRepository = settingsRepository,
+            progressSaveScope = progressSaveScope,
+            onProgressSyncFinished = onProgressSyncFinished,
+            onBack = onBack,
+        )
+        return
+    }
+
     val isAndroid = platform.kind == PlatformKind.Android
     val isDesktop = platform.kind == PlatformKind.Desktop
     val density = LocalDensity.current
@@ -433,7 +451,7 @@ private fun ReaderLoadingIndicator() {
     }
 }
 
-private fun resolveLocalOpeningProgress(
+internal fun resolveLocalOpeningProgress(
     book: BookshelfBook,
     progressRepository: ReadingProgressRepository?,
 ): ChosenReaderProgress? {
@@ -463,7 +481,7 @@ private fun resolveLocalOpeningProgress(
     return chosen
 }
 
-private suspend fun resolveRemoteOpeningProgress(
+internal suspend fun resolveRemoteOpeningProgress(
     book: BookshelfBook,
     progressRepository: ReadingProgressRepository?,
     remoteProgressSource: ReadingProgressRemoteSource?,
@@ -538,7 +556,7 @@ private suspend fun resolveRemoteOpeningProgress(
     return chosen
 }
 
-private data class ChosenReaderProgress(
+internal data class ChosenReaderProgress(
     val source: String,
     val locator: BookLocator?,
     val updatedAt: String?,

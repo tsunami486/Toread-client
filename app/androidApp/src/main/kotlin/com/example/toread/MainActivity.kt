@@ -4,6 +4,7 @@ import android.database.Cursor
 import android.net.Uri
 import android.os.Bundle
 import android.provider.OpenableColumns
+import android.view.KeyEvent
 import android.view.WindowInsets
 import android.view.WindowInsetsController
 import androidx.activity.OnBackPressedCallback
@@ -18,6 +19,7 @@ import com.example.toread.platform.AppBackgroundNotifier
 import com.example.toread.platform.AndroidBackHandlerBridge
 import com.example.toread.platform.AndroidFileAccessBridge
 import com.example.toread.platform.AndroidPlatformFilePickerBridge
+import com.example.toread.platform.AndroidReaderDeviceControlsBridge
 import com.example.toread.platform.AndroidSystemBarsBridge
 import com.example.toread.platform.PlatformFile
 import kotlinx.coroutines.CompletableDeferred
@@ -74,6 +76,13 @@ class MainActivity : ComponentActivity() {
     override fun onStop() {
         AppBackgroundNotifier.notifyEnterBackground()
         super.onStop()
+    }
+
+    override fun onKeyDown(keyCode: Int, event: KeyEvent): Boolean {
+        if (AndroidReaderDeviceControlsBridge.dispatchVolumeKey(keyCode)) {
+            return true
+        }
+        return super.onKeyDown(keyCode, event)
     }
 
     private fun Uri.toPlatformFile(): PlatformFile {

@@ -21,6 +21,7 @@ compose.desktop {
 
         nativeDistributions {
             targetFormats(TargetFormat.Dmg, TargetFormat.Msi, TargetFormat.Deb)
+            modules("java.instrument", "java.management", "java.sql", "jdk.unsupported")
             packageName = "com.example.toread"
             packageVersion = "1.0.0"
         }

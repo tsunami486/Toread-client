@@ -6,7 +6,7 @@ import com.example.toread.progress.PlatformProgressClock
 import com.example.toread.progress.ProgressClock
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
-import kotlinx.coroutines.delay
+import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -14,6 +14,7 @@ import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.withTimeoutOrNull
 
 class ServerConnectionMonitor(
     private val scope: CoroutineScope,
@@ -21,47 +22,54 @@ class ServerConnectionMonitor(
     private val clock: ProgressClock = PlatformProgressClock(),
     private val onlinePollMillis: Long = DefaultOnlinePollMillis,
     private val retryDelaysMillis: List<Long> = DefaultRetryDelaysMillis,
+    private val failuresBeforeOffline: Int = DefaultFailuresBeforeOffline,
 ) {
+    init {
+        require(failuresBeforeOffline > 0) {
+            "failuresBeforeOffline must be positive"
+        }
+    }
+
     private val _state = MutableStateFlow<ServerConnectionState>(
         ServerConnectionState.Checking(startedAt = clock.nowIsoString()),
     )
     val state: StateFlow<ServerConnectionState> = _state.asStateFlow()
 
     private val checkMutex = Mutex()
+    private val checkRequests = Channel<String>(capacity = Channel.CONFLATED)
     private var monitorJob: Job? = null
-    private var immediateCheckJob: Job? = null
     private var retryIndex = 0
+    private var consecutiveFailures = 0
 
     fun start() {
         if (monitorJob?.isActive == true) return
         monitorJob = scope.launch {
+            var trigger = "poll"
             while (isActive) {
-                val checkedState = checkNow(trigger = "poll")
-                val delayMillis = when (checkedState) {
-                    is ServerConnectionState.Online -> onlinePollMillis
-                    is ServerConnectionState.Offline -> nextRetryDelayMillis()
-                    is ServerConnectionState.Checking -> retryDelaysMillis.firstOrNull() ?: onlinePollMillis
+                val outcome = checkNow(trigger = trigger)
+                val delayMillis = if (outcome.succeeded) {
+                    onlinePollMillis
+                } else {
+                    nextRetryDelayMillis()
                 }
-                delay(delayMillis)
+                trigger = withTimeoutOrNull(delayMillis) {
+                    checkRequests.receive()
+                } ?: "poll"
             }
         }
     }
 
     fun stop() {
         monitorJob?.cancel()
-        immediateCheckJob?.cancel()
         monitorJob = null
-        immediateCheckJob = null
     }
 
     fun triggerCheck(reason: String) {
-        immediateCheckJob?.cancel()
-        immediateCheckJob = scope.launch {
-            checkNow(trigger = reason)
-        }
+        checkRequests.trySend(reason)
     }
 
     fun markOnline(source: String) {
+        consecutiveFailures = 0
         retryIndex = 0
         updateState(
             ServerConnectionState.Online(checkedAt = clock.nowIsoString()),
@@ -70,6 +78,7 @@ class ServerConnectionMonitor(
     }
 
     fun markOffline(reason: String, source: String) {
+        consecutiveFailures = failuresBeforeOffline
         updateState(
             ServerConnectionState.Offline(
                 reason = reason,
@@ -80,7 +89,7 @@ class ServerConnectionMonitor(
         )
     }
 
-    private suspend fun checkNow(trigger: String): ServerConnectionState =
+    private suspend fun checkNow(trigger: String): ConnectionCheckOutcome =
         checkMutex.withLock {
             if (_state.value is ServerConnectionState.Checking) {
                 updateState(
@@ -89,21 +98,30 @@ class ServerConnectionMonitor(
                 )
             }
             val checkedAt = clock.nowIsoString()
-            val nextState = when (val result = healthCheck()) {
+            val result = healthCheck()
+            val nextState = when (result) {
                 ServerConnectionResult.Success -> {
+                    consecutiveFailures = 0
                     retryIndex = 0
                     ServerConnectionState.Online(checkedAt = checkedAt)
                 }
                 is ServerConnectionResult.Failure -> {
-                    ServerConnectionState.Offline(
-                        reason = result.message,
-                        checkedAt = checkedAt,
-                        retrying = true,
-                    )
+                    consecutiveFailures++
+                    if (consecutiveFailures >= failuresBeforeOffline) {
+                        ServerConnectionState.Offline(
+                            reason = result.message,
+                            checkedAt = checkedAt,
+                            retrying = true,
+                        )
+                    } else {
+                        _state.value
+                    }
                 }
             }
             updateState(nextState, trigger = trigger)
-            nextState
+            ConnectionCheckOutcome(
+                succeeded = result == ServerConnectionResult.Success,
+            )
         }
 
     private fun nextRetryDelayMillis(): Long {
@@ -133,9 +151,14 @@ class ServerConnectionMonitor(
     private companion object {
         const val LogArea = "network"
         const val DefaultOnlinePollMillis = 30_000L
+        const val DefaultFailuresBeforeOffline = 2
         val DefaultRetryDelaysMillis = listOf(2_000L, 5_000L, 10_000L, 30_000L, 60_000L)
     }
 }
+
+private data class ConnectionCheckOutcome(
+    val succeeded: Boolean,
+)
 
 sealed interface ServerConnectionState {
     data class Checking(val startedAt: String) : ServerConnectionState

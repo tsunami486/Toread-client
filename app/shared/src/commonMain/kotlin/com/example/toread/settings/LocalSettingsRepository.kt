@@ -52,6 +52,69 @@ class LocalSettingsRepository(
             ?.value_
             ?.takeIf { it.isNotBlank() }
 
+    fun androidPdfReaderPreferences(): AndroidPdfReaderPreferences =
+        AndroidPdfReaderPreferences(
+            landscapeDoublePageEnabled = readBooleanSetting(
+                key = PdfAndroidLandscapeDoublePageKey,
+                defaultValue = true,
+            ),
+            volumeKeysEnabled = readBooleanSetting(
+                key = PdfAndroidVolumeKeysKey,
+                defaultValue = false,
+            ),
+            orientationMode = PdfOrientationMode.fromStoredValue(
+                readSetting(PdfAndroidOrientationModeKey),
+            ) ?: PdfOrientationMode.System,
+            tapToTurnPagesEnabled = readBooleanSetting(
+                key = PdfAndroidTapToTurnPagesKey,
+                defaultValue = true,
+            ),
+            reverseTapToTurnPages = readBooleanSetting(
+                key = PdfAndroidReverseTapToTurnPagesKey,
+                defaultValue = false,
+            ),
+            pageAnimationEnabled = readBooleanSetting(
+                key = PdfAndroidPageAnimationKey,
+                defaultValue = true,
+            ),
+            doubleTapZoomEnabled = readBooleanSetting(
+                key = PdfAndroidDoubleTapZoomKey,
+                defaultValue = true,
+            ),
+            longPressZoomEnabled = readBooleanSetting(
+                key = PdfAndroidLongPressZoomKey,
+                defaultValue = true,
+            ),
+            showPageNumber = readBooleanSetting(
+                key = PdfAndroidShowPageNumberKey,
+                defaultValue = true,
+            ),
+            showStatusInfo = readBooleanSetting(
+                key = PdfAndroidShowStatusInfoKey,
+                defaultValue = true,
+            ),
+            autoPageTurningIntervalSeconds = readIntSetting(
+                key = PdfAndroidAutoPageTurningIntervalKey,
+                defaultValue = DefaultPdfAutoPageTurningIntervalSeconds,
+                range = PdfAutoPageTurningIntervalRange,
+            ),
+        )
+
+    fun pdfBookPreferences(bookHash: String): PdfBookPreferences =
+        PdfBookPreferences(
+            rightToLeft = readBooleanSetting(
+                key = pdfBookSettingKey(bookHash, PdfBookRightToLeftSuffix),
+                defaultValue = false,
+            ),
+            coverAlone = readBooleanSetting(
+                key = pdfBookSettingKey(bookHash, PdfBookCoverAloneSuffix),
+                defaultValue = true,
+            ),
+            readerMode = PdfReaderMode.fromStoredValue(
+                readSetting(pdfBookSettingKey(bookHash, PdfBookReaderModeSuffix)),
+            ) ?: PdfReaderMode.PagedHorizontal,
+        )
+
     fun setDynamicColorEnabled(enabled: Boolean) {
         saveSetting(DynamicColorKey, enabled.toString())
     }
@@ -62,6 +125,74 @@ class LocalSettingsRepository(
 
     fun setBookshelfLayoutMode(value: String) {
         saveSetting(BookshelfLayoutModeKey, value)
+    }
+
+    fun setPdfAndroidLandscapeDoublePageEnabled(enabled: Boolean) {
+        saveSetting(PdfAndroidLandscapeDoublePageKey, enabled.toString())
+    }
+
+    fun setPdfAndroidVolumeKeysEnabled(enabled: Boolean) {
+        saveSetting(PdfAndroidVolumeKeysKey, enabled.toString())
+    }
+
+    fun setPdfAndroidOrientationMode(mode: PdfOrientationMode) {
+        saveSetting(PdfAndroidOrientationModeKey, mode.storedValue)
+    }
+
+    fun setPdfAndroidTapToTurnPagesEnabled(enabled: Boolean) {
+        saveSetting(PdfAndroidTapToTurnPagesKey, enabled.toString())
+    }
+
+    fun setPdfAndroidReverseTapToTurnPages(enabled: Boolean) {
+        saveSetting(PdfAndroidReverseTapToTurnPagesKey, enabled.toString())
+    }
+
+    fun setPdfAndroidPageAnimationEnabled(enabled: Boolean) {
+        saveSetting(PdfAndroidPageAnimationKey, enabled.toString())
+    }
+
+    fun setPdfAndroidDoubleTapZoomEnabled(enabled: Boolean) {
+        saveSetting(PdfAndroidDoubleTapZoomKey, enabled.toString())
+    }
+
+    fun setPdfAndroidLongPressZoomEnabled(enabled: Boolean) {
+        saveSetting(PdfAndroidLongPressZoomKey, enabled.toString())
+    }
+
+    fun setPdfAndroidShowPageNumber(enabled: Boolean) {
+        saveSetting(PdfAndroidShowPageNumberKey, enabled.toString())
+    }
+
+    fun setPdfAndroidShowStatusInfo(enabled: Boolean) {
+        saveSetting(PdfAndroidShowStatusInfoKey, enabled.toString())
+    }
+
+    fun setPdfAndroidAutoPageTurningIntervalSeconds(seconds: Int) {
+        require(seconds in PdfAutoPageTurningIntervalRange) {
+            "PDF auto page turning interval must be in $PdfAutoPageTurningIntervalRange"
+        }
+        saveSetting(PdfAndroidAutoPageTurningIntervalKey, seconds.toString())
+    }
+
+    fun setPdfBookRightToLeft(bookHash: String, enabled: Boolean) {
+        saveSetting(
+            key = pdfBookSettingKey(bookHash, PdfBookRightToLeftSuffix),
+            value = enabled.toString(),
+        )
+    }
+
+    fun setPdfBookCoverAlone(bookHash: String, enabled: Boolean) {
+        saveSetting(
+            key = pdfBookSettingKey(bookHash, PdfBookCoverAloneSuffix),
+            value = enabled.toString(),
+        )
+    }
+
+    fun setPdfBookReaderMode(bookHash: String, mode: PdfReaderMode) {
+        saveSetting(
+            key = pdfBookSettingKey(bookHash, PdfBookReaderModeSuffix),
+            value = mode.storedValue,
+        )
     }
 
     fun setLoggedIn(email: String?) {
@@ -85,6 +216,30 @@ class LocalSettingsRepository(
         saveSetting(RefreshTokenKey, "")
     }
 
+    private fun readSetting(key: String): String? =
+        database.toreadDatabaseQueries
+            .getSetting(key)
+            .executeAsOneOrNull()
+            ?.value_
+
+    private fun readBooleanSetting(key: String, defaultValue: Boolean): Boolean =
+        readSetting(key)?.toBooleanStrictOrNull() ?: defaultValue
+
+    private fun readIntSetting(
+        key: String,
+        defaultValue: Int,
+        range: IntRange,
+    ): Int = readSetting(key)
+        ?.toIntOrNull()
+        ?.takeIf { it in range }
+        ?: defaultValue
+
+    private fun pdfBookSettingKey(bookHash: String, suffix: String): String {
+        val normalizedBookHash = bookHash.trim()
+        require(normalizedBookHash.isNotEmpty()) { "bookHash must not be blank" }
+        return "$PdfBookKeyPrefix$normalizedBookHash.$suffix"
+    }
+
     private fun saveSetting(key: String, value: String) {
         val now = clock.nowIsoString()
         database.toreadDatabaseQueries.upsertSetting(
@@ -103,6 +258,25 @@ class LocalSettingsRepository(
         const val DynamicColorKey = "dynamic_color_enabled"
         const val AutoSyncKey = "auto_sync_enabled"
         const val BookshelfLayoutModeKey = "bookshelf_layout_mode"
+        const val PdfAndroidLandscapeDoublePageKey =
+            "reader.pdf.android.landscape_double_page_enabled"
+        const val PdfAndroidVolumeKeysKey = "reader.pdf.android.volume_keys_enabled"
+        const val PdfAndroidOrientationModeKey = "reader.pdf.android.orientation_mode"
+        const val PdfAndroidTapToTurnPagesKey = "reader.pdf.android.tap_to_turn_pages_enabled"
+        const val PdfAndroidReverseTapToTurnPagesKey = "reader.pdf.android.reverse_tap_to_turn_pages"
+        const val PdfAndroidPageAnimationKey = "reader.pdf.android.page_animation_enabled"
+        const val PdfAndroidDoubleTapZoomKey = "reader.pdf.android.double_tap_zoom_enabled"
+        const val PdfAndroidLongPressZoomKey = "reader.pdf.android.long_press_zoom_enabled"
+        const val PdfAndroidShowPageNumberKey = "reader.pdf.android.show_page_number"
+        const val PdfAndroidShowStatusInfoKey = "reader.pdf.android.show_status_info"
+        const val PdfAndroidAutoPageTurningIntervalKey =
+            "reader.pdf.android.auto_page_turning_interval_seconds"
+        const val PdfBookKeyPrefix = "reader.pdf.book."
+        const val PdfBookRightToLeftSuffix = "right_to_left"
+        const val PdfBookCoverAloneSuffix = "cover_alone"
+        const val PdfBookReaderModeSuffix = "reader_mode"
+        const val DefaultPdfAutoPageTurningIntervalSeconds = 5
+        val PdfAutoPageTurningIntervalRange = 1..20
     }
 }
 

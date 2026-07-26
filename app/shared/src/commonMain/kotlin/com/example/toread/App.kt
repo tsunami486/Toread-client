@@ -333,7 +333,6 @@ fun ToreadApp() {
 
     DisposableEffect(progressSyncScheduler, serverConnectionMonitor) {
         AppBackgroundNotifier.setOnEnterBackground {
-            serverConnectionMonitor?.triggerCheck("app_background")
             progressSyncScheduler.flushNow()
         }
         onDispose {
@@ -487,6 +486,7 @@ fun ToreadApp() {
                             progressRepository = progressRepository,
                             progressSyncScheduler = progressSyncScheduler,
                             remoteProgressSource = remoteProgressSource,
+                            settingsRepository = settingsRepository,
                             progressSaveScope = appScope,
                             readerContentLoader = readerContentLoader,
                             onProgressSyncFinished = { refreshKey++ },

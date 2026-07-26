@@ -42,12 +42,16 @@ class BookLocatorJsonTest {
 
     @Test
     fun pdfLocatorRoundTripsThroughJson() {
+        val locator = PdfLocator(
+            pageIndex = 4,
+            pageOffsetY = 0.2,
+            globalProgress = 0.5,
+        )
         val decoded = BookLocatorJson.decode(
-            BookLocatorJson.encode(PdfLocator(pageIndex = 4, pageOffsetY = 0.2, globalProgress = 0.5)),
+            BookLocatorJson.encode(locator),
         )
 
-        assertIs<PdfLocator>(decoded)
-        assertEquals(0.5, decoded.globalProgress)
+        assertEquals(locator, assertIs<PdfLocator>(decoded))
     }
 
     @Test
