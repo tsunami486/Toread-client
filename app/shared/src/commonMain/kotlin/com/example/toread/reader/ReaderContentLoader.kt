@@ -10,6 +10,21 @@ data class ReaderDocument(
     val isReadable: Boolean = text.isNotBlank() || flow?.chapters?.isNotEmpty() == true
 }
 
+data class EpubPublicationIndex(
+    val title: String,
+    val spineItemCount: Int,
+    val chapters: List<EpubChapterMetadata>,
+) {
+    val totalContentWeight: Long = chapters.sumOf(EpubChapterMetadata::contentWeight)
+}
+
+data class EpubChapterMetadata(
+    val ord: Int,
+    val href: String,
+    val title: String,
+    val contentWeight: Long,
+)
+
 data class ReaderFlowDocument(
     val chapters: List<ReaderFlowChapter>,
 )
@@ -63,6 +78,17 @@ data class EpubImageResource(
 
 expect class ReaderContentLoader() {
     suspend fun load(filePath: String, format: String, title: String): ReaderDocument
+
+    suspend fun loadEpubPublicationIndex(
+        filePath: String,
+        title: String,
+    ): EpubPublicationIndex?
+
+    suspend fun loadEpubChapter(
+        filePath: String,
+        title: String,
+        chapterOrd: Int,
+    ): ReaderDocument?
 }
 
 expect class EpubImageBytesLoader() {

@@ -1,6 +1,8 @@
 package com.example.toread.reader
 
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.withContext
 import java.io.ByteArrayOutputStream
 import java.nio.ByteBuffer
@@ -11,14 +13,102 @@ import java.nio.file.Files
 import java.nio.file.Paths
 import java.util.zip.ZipFile
 
+private val EpubScriptTagRegex = Regex("""(?is)<script.*?</script>""")
+private val EpubStyleTagRegex = Regex("""(?is)<style.*?</style>""")
+private val EpubAnyTagRegex = Regex("""(?is)<[^>]+>""")
+private val EpubBodyRegex = Regex("""(?is)<body\b[^>]*>(.*?)</body>""")
+private val EpubTagNameRegex = Regex("""^</?\s*([A-Za-z0-9:_-]+)""")
+private val EpubRootFileRegex = Regex("""(?is)<rootfile\b([^>]*)>""")
+private val EpubManifestItemRegex = Regex("""(?is)<item\b([^>]*)/?>""")
+private val EpubSpineRegex = Regex("""(?is)<spine\b([^>]*)>""")
+private val EpubSpineItemRegex = Regex("""(?is)<itemref\b([^>]*)/?>""")
+private val EpubNcxNavPointRegex = Regex("""(?is)<navPoint\b[^>]*>(.*?)</navPoint>""")
+private val EpubNcxLabelRegex = Regex("""(?is)<navLabel\b[^>]*>.*?<text\b[^>]*>(.*?)</text>.*?</navLabel>""")
+private val EpubNcxContentRegex = Regex("""(?is)<content\b([^>]*)/?>""")
+private val EpubNavLinkRegex = Regex("""(?is)<a\b([^>]*)>(.*?)</a>""")
+private val EpubWhitespaceRegex = Regex("""\s+""")
+private val EpubXmlAttributeRegex = Regex("""([A-Za-z_:][A-Za-z0-9_.:-]*)\s*=\s*("([^"]*)"|'([^']*)')""")
+private val EpubHexEntityRegex = Regex("""&#x([0-9a-fA-F]+);""")
+private val EpubDecimalEntityRegex = Regex("""&#(\d+);""")
+private val EpubBreakTagRegex = Regex("""(?i)<br\s*/?>""")
+private val EpubClosingBlockTagRegex = Regex("""(?i)</(p|div|section|article|h[1-6]|li|tr)>""")
+private val EpubHorizontalWhitespaceRegex = Regex("""[ \t]+""")
+private val EpubExtraLineBreakRegex = Regex("""\n{3,}""")
+private val EpubPositiveNumberRegex = Regex("""([0-9.]+)""")
+private val EpubClosingBlockTags = setOf("p", "div", "section", "article", "h1", "h2", "h3", "h4", "h5", "h6", "li", "tr")
+
 actual class ReaderContentLoader actual constructor() {
+    private val publicationCacheLock = Any()
+
+    @Volatile
+    private var cachedPublication: IndexedEpubPublication? = null
+
     actual suspend fun load(filePath: String, format: String, title: String): ReaderDocument = withContext(Dispatchers.IO) {
         val normalizedFormat = format.lowercase()
         when (normalizedFormat) {
             "txt" -> ReaderDocument(title, normalizedFormat, decodeText(Files.readAllBytes(Paths.get(filePath))))
-            "epub" -> extractEpubDocument(filePath, normalizedFormat, title)
+            "epub" -> loadFirstReadableEpubChapter(filePath, title)
             "pdf" -> ReaderDocument(title, normalizedFormat, "", "PDF 渲染将在后续接入，目前已完成本地导入与书架打开。")
             else -> ReaderDocument(title, normalizedFormat, "", "暂不支持阅读 .$format 文件。")
+        }
+    }
+
+    actual suspend fun loadEpubPublicationIndex(
+        filePath: String,
+        title: String,
+    ): EpubPublicationIndex? = withContext(Dispatchers.IO) {
+        publicationFor(filePath, title)?.index
+    }
+
+    actual suspend fun loadEpubChapter(
+        filePath: String,
+        title: String,
+        chapterOrd: Int,
+    ): ReaderDocument? = withContext(Dispatchers.IO) {
+        val publication = publicationFor(filePath, title) ?: return@withContext null
+        val chapter = publication.chaptersByOrd[chapterOrd] ?: return@withContext null
+        readEpubChapter(filePath, title, publication, chapter)
+    }
+
+    private suspend fun loadFirstReadableEpubChapter(
+        filePath: String,
+        title: String,
+    ): ReaderDocument {
+        val publication = publicationFor(filePath, title)
+            ?: return unreadableEpubDocument(title, "无法读取 EPUB 目录结构。")
+        for (chapter in publication.index.chapters) {
+            currentCoroutineContext().ensureActive()
+            readEpubChapter(
+                filePath = filePath,
+                title = title,
+                publication = publication,
+                chapter = publication.chaptersByOrd.getValue(chapter.ord),
+            )?.let { return it }
+        }
+        return unreadableEpubDocument(title, "未能从 EPUB 中抽取正文文本。")
+    }
+
+    private suspend fun publicationFor(
+        filePath: String,
+        title: String,
+    ): IndexedEpubPublication? {
+        cachedPublication
+            ?.takeIf { cached -> cached.filePath == filePath && cached.index.title == title }
+            ?.let { return it }
+
+        currentCoroutineContext().ensureActive()
+        val loaded = ZipFile(filePath).use { zip ->
+            buildEpubPublicationIndex(
+                zip = zip,
+                filePath = filePath,
+                title = title,
+            )
+        } ?: return null
+        currentCoroutineContext().ensureActive()
+        return synchronized(publicationCacheLock) {
+            cachedPublication
+                ?.takeIf { cached -> cached.filePath == filePath && cached.index.title == title }
+                ?: loaded.also { cachedPublication = it }
         }
     }
 }
@@ -32,89 +122,164 @@ actual class EpubImageBytesLoader actual constructor() {
     }
 }
 
-private fun extractEpubDocument(filePath: String, format: String, title: String): ReaderDocument {
-    ZipFile(filePath).use { zip ->
-        val epubPackage = readEpubPackage(zip) ?: return ReaderDocument(title, format, "", "无法读取 EPUB 目录结构。")
-        val chapterTitles = readEpubChapterTitles(zip, epubPackage)
-        val manifestByPath = epubPackage.manifest.values.associateBy { item ->
-            resolveEpubPath(epubPackage.basePath, item.href)
-        }
-        val documentText = StringBuilder()
-        val chapters = mutableListOf<ReaderFlowChapter>()
+private data class ResolvedEpubSpineEntry(
+    val ordinalHint: Int,
+    val entryPath: String,
+    val archiveEntryName: String,
+    val navigationTitle: String?,
+)
 
-        epubPackage.spineIds.forEach { id ->
-            val item = epubPackage.manifest[id] ?: return@forEach
-            val entryPath = resolveEpubPath(epubPackage.basePath, item.href)
-            val entry = zip.getEntry(entryPath) ?: zip.getEntry(item.href) ?: return@forEach
-            val html = zip.getInputStream(entry).use { decodeText(it.readBytes()) }
-            val body = stripHtml(html)
-            val chapterTitle = chapterTitles[entryPath]?.takeIf { it.isNotBlank() }
-            val displayTitle = chapterTitle ?: "第 ${chapters.size + 1} 章"
-            val titleStartOffset = documentText.length
-            var titleEndOffset = titleStartOffset
-            if (chapterTitle != null && shouldPrependChapterTitle(chapterTitle, body)) {
-                appendParagraphSeparator(documentText)
-                val actualTitleStart = documentText.length
-                documentText.append(chapterTitle)
-                titleEndOffset = documentText.length
-                documentText.append("\n\n")
-                val extracted = extractEpubFlowBlocks(
-                    html = html,
-                    bookFilePath = filePath,
-                    chapterOrd = chapters.size,
-                    chapterHref = entryPath,
-                    chapterTitle = displayTitle,
-                    chapterBasePath = entryPath.substringBeforeLast('/', missingDelimiterValue = ""),
-                    manifestByPath = manifestByPath,
-                    documentText = documentText,
-                )
-                if (extracted.blocks.isNotEmpty()) {
-                    chapters += ReaderFlowChapter(
-                        ord = chapters.size,
-                        href = entryPath,
-                        title = displayTitle,
-                        titleStartOffset = actualTitleStart,
-                        titleEndOffset = titleEndOffset,
-                        blocks = extracted.blocks,
-                    )
-                }
-            } else {
-                val extracted = extractEpubFlowBlocks(
-                    html = html,
-                    bookFilePath = filePath,
-                    chapterOrd = chapters.size,
-                    chapterHref = entryPath,
-                    chapterTitle = displayTitle,
-                    chapterBasePath = entryPath.substringBeforeLast('/', missingDelimiterValue = ""),
-                    manifestByPath = manifestByPath,
-                    documentText = documentText,
-                )
-                if (extracted.blocks.isNotEmpty()) {
-                    chapters += ReaderFlowChapter(
-                        ord = chapters.size,
-                        href = entryPath,
-                        title = displayTitle,
-                        titleStartOffset = titleStartOffset,
-                        titleEndOffset = titleStartOffset,
-                        blocks = extracted.blocks,
-                    )
-                }
-            }
-        }
+private data class IndexedEpubPublication(
+    val filePath: String,
+    val index: EpubPublicationIndex,
+    val chaptersByOrd: Map<Int, ResolvedEpubSpineEntry>,
+    val manifestByPath: Map<String, EpubManifestItem>,
+)
 
-        val text = documentText.toString().trimEnd()
-        return if (text.isBlank() && chapters.isEmpty()) {
-            ReaderDocument(title, format, "未能从 EPUB 中抽取正文文本。")
-        } else {
-            ReaderDocument(
-                title = title,
-                format = format,
-                text = text,
-                flow = ReaderFlowDocument(chapters),
-            )
-        }
+private suspend fun buildEpubPublicationIndex(
+    zip: ZipFile,
+    filePath: String,
+    title: String,
+): IndexedEpubPublication? {
+    currentCoroutineContext().ensureActive()
+    val epubPackage = readEpubPackage(zip) ?: return null
+    val chapterTitles = readEpubChapterTitles(zip, epubPackage)
+    val manifestByPath = epubPackage.manifest.values.associateBy { item ->
+        resolveEpubPath(epubPackage.basePath, item.href)
     }
+    val chapters = mutableListOf<EpubChapterMetadata>()
+    val chaptersByOrd = mutableMapOf<Int, ResolvedEpubSpineEntry>()
+    epubPackage.spineIds.forEachIndexed { ordinal, id ->
+        currentCoroutineContext().ensureActive()
+        val item = epubPackage.manifest[id] ?: return@forEachIndexed
+        val resolvedPath = resolveEpubPath(epubPackage.basePath, item.href)
+        val resolvedEntry = zip.getEntry(resolvedPath)
+        val archiveEntry = resolvedEntry ?: zip.getEntry(item.href) ?: return@forEachIndexed
+        val canonicalPath = if (resolvedEntry != null) {
+            resolvedPath
+        } else {
+            resolveEpubPath(basePath = "", href = archiveEntry.name)
+        }
+        val navigationTitle = (
+            chapterTitles[canonicalPath]
+                ?: chapterTitles[resolvedPath]
+            )
+            ?.takeIf { chapterTitle -> chapterTitle.isNotBlank() }
+        val metadata = EpubChapterMetadata(
+            ord = ordinal,
+            href = canonicalPath,
+            title = navigationTitle ?: "第 ${ordinal + 1} 章",
+            contentWeight = archiveEntry.estimatedContentWeight(),
+        )
+        chapters += metadata
+        chaptersByOrd[ordinal] = ResolvedEpubSpineEntry(
+            ordinalHint = ordinal,
+            entryPath = canonicalPath,
+            archiveEntryName = archiveEntry.name,
+            navigationTitle = navigationTitle,
+        )
+    }
+    currentCoroutineContext().ensureActive()
+    return IndexedEpubPublication(
+        filePath = filePath,
+        index = EpubPublicationIndex(
+            title = title,
+            spineItemCount = epubPackage.spineIds.size,
+            chapters = chapters,
+        ),
+        chaptersByOrd = chaptersByOrd,
+        manifestByPath = manifestByPath,
+    )
 }
+
+private suspend fun readEpubChapter(
+    filePath: String,
+    title: String,
+    publication: IndexedEpubPublication,
+    chapter: ResolvedEpubSpineEntry,
+): ReaderDocument? =
+    ZipFile(filePath).use { zip ->
+        extractEpubChapterDocument(
+            zip = zip,
+            filePath = filePath,
+            title = title,
+            chapter = chapter,
+            manifestByPath = publication.manifestByPath,
+        )
+    }
+
+private suspend fun extractEpubChapterDocument(
+    zip: ZipFile,
+    filePath: String,
+    title: String,
+    chapter: ResolvedEpubSpineEntry,
+    manifestByPath: Map<String, EpubManifestItem>,
+): ReaderDocument? {
+    currentCoroutineContext().ensureActive()
+    val entry = zip.getEntry(chapter.archiveEntryName) ?: return null
+    val html = zip.getInputStream(entry).use { decodeText(it.readBytes()) }
+    currentCoroutineContext().ensureActive()
+
+    val documentText = StringBuilder()
+    val body = stripHtml(html)
+    val prependTitle =
+        chapter.navigationTitle != null &&
+            shouldPrependChapterTitle(chapter.navigationTitle, body)
+    val titleStartOffset = documentText.length
+    val titleEndOffset = if (prependTitle) {
+        documentText.append(chapter.navigationTitle)
+        val endOffset = documentText.length
+        documentText.append("\n\n")
+        endOffset
+    } else {
+        titleStartOffset
+    }
+    val extracted = extractEpubFlowBlocks(
+        html = html,
+        bookFilePath = filePath,
+        chapterOrd = chapter.ordinalHint,
+        chapterHref = chapter.entryPath,
+        chapterTitle = chapter.navigationTitle ?: "第 ${chapter.ordinalHint + 1} 章",
+        chapterBasePath = chapter.entryPath.substringBeforeLast('/', missingDelimiterValue = ""),
+        manifestByPath = manifestByPath,
+        documentText = documentText,
+    )
+    currentCoroutineContext().ensureActive()
+    if (extracted.blocks.isEmpty()) return null
+
+    documentText.trimTrailingWhitespace()
+    return ReaderDocument(
+        title = title,
+        format = "epub",
+        text = documentText.toString(),
+        flow = ReaderFlowDocument(
+            chapters = listOf(
+                ReaderFlowChapter(
+                    ord = chapter.ordinalHint,
+                    href = chapter.entryPath,
+                    title = chapter.navigationTitle ?: "第 ${chapter.ordinalHint + 1} 章",
+                    titleStartOffset = titleStartOffset,
+                    titleEndOffset = titleEndOffset,
+                    blocks = extracted.blocks,
+                ),
+            ),
+        ),
+    )
+}
+
+private fun java.util.zip.ZipEntry.estimatedContentWeight(): Long =
+    size
+        .takeIf { value -> value > 0L }
+        ?: compressedSize.takeIf { value -> value > 0L }
+        ?: 1L
+
+private fun unreadableEpubDocument(title: String, message: String): ReaderDocument =
+    ReaderDocument(
+        title = title,
+        format = "epub",
+        text = "",
+        message = message,
+    )
 
 private data class EpubFlowExtraction(
     val blocks: List<ReaderContentBlock>,
@@ -131,16 +296,14 @@ private fun extractEpubFlowBlocks(
     documentText: StringBuilder,
 ): EpubFlowExtraction {
     val body = extractHtmlBody(html)
-        .replace(Regex("""(?is)<script.*?</script>"""), "")
-        .replace(Regex("""(?is)<style.*?</style>"""), "")
+        .replace(EpubScriptTagRegex, "")
+        .replace(EpubStyleTagRegex, "")
     val blocks = mutableListOf<ReaderContentBlock>()
     val paragraph = StringBuilder()
     var unitIndex = 0
 
     fun flushParagraph() {
-        val text = paragraph.toString()
-            .replace(Regex("""[ \t]+"""), " ")
-            .trim()
+        val text = paragraph.toString().trim()
         paragraph.clear()
         if (text.isBlank()) return
         appendParagraphSeparator(documentText)
@@ -160,14 +323,19 @@ private fun extractEpubFlowBlocks(
     }
 
     fun appendDecodedText(rawText: String) {
-        val normalized = decodeXmlEntities(rawText)
-            .replace(Regex("""\s+"""), " ")
-        if (normalized.isNotBlank()) {
-            paragraph.append(normalized)
+        val decoded = decodeXmlEntities(rawText)
+        decoded.forEach { char ->
+            if (char.isEpubCollapsibleWhitespace()) {
+                if (paragraph.isNotEmpty() && paragraph[paragraph.lastIndex] != ' ') {
+                    paragraph.append(' ')
+                }
+            } else {
+                paragraph.append(char)
+            }
         }
     }
 
-    Regex("""(?is)<[^>]+>""").findAll(body).fold(0) { lastIndex, match ->
+    EpubAnyTagRegex.findAll(body).fold(0) { lastIndex, match ->
         appendDecodedText(body.substring(lastIndex, match.range.first))
         val tag = match.value
         val name = tagName(tag)
@@ -200,7 +368,11 @@ private fun extractEpubFlowBlocks(
                     )
                 }
             }
-            name == "br" -> paragraph.append(' ')
+            name == "br" -> {
+                if (paragraph.isNotEmpty() && paragraph[paragraph.lastIndex] != ' ') {
+                    paragraph.append(' ')
+                }
+            }
             tag.isClosingBlockTag(name) -> flushParagraph()
         }
         match.range.last + 1
@@ -228,7 +400,7 @@ private data class EpubManifestItem(
 private fun readEpubPackage(zip: ZipFile): EpubPackage? {
     val container = zip.getEntry("META-INF/container.xml") ?: return null
     val containerXml = zip.getInputStream(container).use { decodeText(it.readBytes()) }
-    val rootFileTag = Regex("""(?is)<rootfile\b([^>]*)>""").find(containerXml)?.groupValues?.getOrNull(1)
+    val rootFileTag = EpubRootFileRegex.find(containerXml)?.groupValues?.getOrNull(1)
     val opfPath = rootFileTag
         ?.let(::parseXmlAttributes)
         ?.get("full-path")
@@ -241,7 +413,7 @@ private fun readEpubPackage(zip: ZipFile): EpubPackage? {
     val basePath = opfPath.substringBeforeLast('/', missingDelimiterValue = "")
         .takeIf { it.isNotBlank() }
         .orEmpty()
-    val manifest = Regex("""(?is)<item\b([^>]*)/?>""")
+    val manifest = EpubManifestItemRegex
         .findAll(opfXml)
         .mapNotNull { match ->
             val attrs = parseXmlAttributes(match.groupValues[1])
@@ -255,9 +427,9 @@ private fun readEpubPackage(zip: ZipFile): EpubPackage? {
             )
         }
         .toMap()
-    val spineTag = Regex("""(?is)<spine\b([^>]*)>""").find(opfXml)?.groupValues?.getOrNull(1)
+    val spineTag = EpubSpineRegex.find(opfXml)?.groupValues?.getOrNull(1)
     val tocId = spineTag?.let(::parseXmlAttributes)?.get("toc")
-    val spineIds = Regex("""(?is)<itemref\b([^>]*)/?>""")
+    val spineIds = EpubSpineItemRegex
         .findAll(opfXml)
         .mapNotNull { parseXmlAttributes(it.groupValues[1])["idref"] }
         .toList()
@@ -284,17 +456,17 @@ private fun readNcxChapterTitles(zip: ZipFile, epubPackage: EpubPackage): Map<St
     val ncxEntry = zip.getEntry(ncxPath) ?: zip.getEntry(ncxItem.href) ?: return emptyMap()
     val ncxXml = zip.getInputStream(ncxEntry).use { decodeText(it.readBytes()) }
     val ncxBasePath = ncxPath.substringBeforeLast('/', missingDelimiterValue = "")
-    return Regex("""(?is)<navPoint\b[^>]*>(.*?)</navPoint>""")
+    return EpubNcxNavPointRegex
         .findAll(ncxXml)
         .mapNotNull { match ->
             val navPoint = match.groupValues[1]
-            val title = Regex("""(?is)<navLabel\b[^>]*>.*?<text\b[^>]*>(.*?)</text>.*?</navLabel>""")
+            val title = EpubNcxLabelRegex
                 .find(navPoint)
                 ?.groupValues
                 ?.getOrNull(1)
                 ?.let(::stripHtml)
                 ?.takeIf { it.isNotBlank() }
-            val srcTag = Regex("""(?is)<content\b([^>]*)/?>""").find(navPoint)?.groupValues?.getOrNull(1)
+            val srcTag = EpubNcxContentRegex.find(navPoint)?.groupValues?.getOrNull(1)
             val src = srcTag?.let(::parseXmlAttributes)?.get("src")?.let(::decodeXmlEntities)
             val path = src?.let { resolveEpubPath(ncxBasePath, it) }
             if (title != null && path != null) path to title else null
@@ -306,14 +478,14 @@ private fun readNcxChapterTitles(zip: ZipFile, epubPackage: EpubPackage): Map<St
 private fun readNavChapterTitles(zip: ZipFile, epubPackage: EpubPackage): Map<String, String> {
     val navItem = epubPackage.manifest.values.firstOrNull { item ->
         item.properties
-            ?.split(Regex("""\s+"""))
+            ?.split(EpubWhitespaceRegex)
             ?.any { it.equals("nav", ignoreCase = true) } == true
     } ?: return emptyMap()
     val navPath = resolveEpubPath(epubPackage.basePath, navItem.href)
     val navEntry = zip.getEntry(navPath) ?: zip.getEntry(navItem.href) ?: return emptyMap()
     val navHtml = zip.getInputStream(navEntry).use { decodeText(it.readBytes()) }
     val navBasePath = navPath.substringBeforeLast('/', missingDelimiterValue = "")
-    return Regex("""(?is)<a\b([^>]*)>(.*?)</a>""")
+    return EpubNavLinkRegex
         .findAll(navHtml)
         .mapNotNull { match ->
             val href = parseXmlAttributes(match.groupValues[1])["href"]?.let(::decodeXmlEntities)
@@ -339,14 +511,14 @@ private fun appendParagraphSeparator(builder: StringBuilder) {
 }
 
 private fun extractHtmlBody(value: String): String =
-    Regex("""(?is)<body\b[^>]*>(.*?)</body>""")
+    EpubBodyRegex
         .find(value)
         ?.groupValues
         ?.getOrNull(1)
         ?: value
 
 private fun tagName(tag: String): String? =
-    Regex("""^</?\s*([A-Za-z0-9:_-]+)""")
+    EpubTagNameRegex
         .find(tag.trim())
         ?.groupValues
         ?.getOrNull(1)
@@ -354,7 +526,7 @@ private fun tagName(tag: String): String? =
         ?.lowercase()
 
 private fun String.isClosingBlockTag(name: String?): Boolean =
-    startsWith("</") && name in setOf("p", "div", "section", "article", "h1", "h2", "h3", "h4", "h5", "h6", "li", "tr")
+    startsWith("</") && name in EpubClosingBlockTags
 
 private fun parseImageDimension(attrs: Map<String, String>, name: String): Int? {
     attrs[name]?.let { direct ->
@@ -371,7 +543,7 @@ private fun parseImageDimension(attrs: Map<String, String>, name: String): Int? 
 }
 
 private fun String.extractPositiveNumber(): Int? =
-    Regex("""([0-9.]+)""")
+    EpubPositiveNumberRegex
         .find(this)
         ?.groupValues
         ?.getOrNull(1)
@@ -394,7 +566,7 @@ private fun resolveEpubPath(basePath: String, href: String): String {
 }
 
 private fun parseXmlAttributes(value: String): Map<String, String> =
-    Regex("""([A-Za-z_:][A-Za-z0-9_.:-]*)\s*=\s*("([^"]*)"|'([^']*)')""")
+    EpubXmlAttributeRegex
         .findAll(value)
         .associate { match ->
             val attrValue = match.groupValues[3].ifEmpty { match.groupValues[4] }
@@ -431,12 +603,13 @@ private fun percentDecode(value: String): String {
     return builder.toString()
 }
 
-private fun decodeXmlEntities(value: String): String =
-    value
-        .replace(Regex("""&#x([0-9a-fA-F]+);""")) { match ->
+private fun decodeXmlEntities(value: String): String {
+    if ('&' !in value) return value
+    return value
+        .replace(EpubHexEntityRegex) { match ->
             decodeXmlCodePoint(match.groupValues[1].toIntOrNull(16))
         }
-        .replace(Regex("""&#(\d+);""")) { match ->
+        .replace(EpubDecimalEntityRegex) { match ->
             decodeXmlCodePoint(match.groupValues[1].toIntOrNull())
         }
         .replace("&nbsp;", " ")
@@ -445,6 +618,7 @@ private fun decodeXmlEntities(value: String): String =
         .replace("&quot;", "\"")
         .replace("&apos;", "'")
         .replace("&amp;", "&")
+}
 
 private fun decodeXmlCodePoint(codePoint: Int?): String =
     if (codePoint != null && java.lang.Character.isValidCodePoint(codePoint)) {
@@ -476,12 +650,21 @@ private fun tryDecode(bytes: ByteArray, charset: Charset): String? =
 private fun stripHtml(value: String): String =
     decodeXmlEntities(
         value
-            .replace(Regex("""(?is)<script.*?</script>"""), "")
-            .replace(Regex("""(?is)<style.*?</style>"""), "")
-            .replace(Regex("""(?i)<br\s*/?>"""), "\n")
-            .replace(Regex("""(?i)</(p|div|section|article|h[1-6]|li|tr)>"""), "\n\n")
-            .replace(Regex("""<[^>]+>"""), ""),
+            .replace(EpubScriptTagRegex, "")
+            .replace(EpubStyleTagRegex, "")
+            .replace(EpubBreakTagRegex, "\n")
+            .replace(EpubClosingBlockTagRegex, "\n\n")
+            .replace(EpubAnyTagRegex, ""),
     )
-        .replace(Regex("""[ \t]+"""), " ")
-        .replace(Regex("""\n{3,}"""), "\n\n")
+        .replace(EpubHorizontalWhitespaceRegex, " ")
+        .replace(EpubExtraLineBreakRegex, "\n\n")
         .trim()
+
+private fun Char.isEpubCollapsibleWhitespace(): Boolean =
+    this == ' ' || this == '\t' || this == '\n' || this == '\r' || this == '\u000B' || this == '\u000C'
+
+private fun StringBuilder.trimTrailingWhitespace() {
+    while (isNotEmpty() && this[lastIndex].isWhitespace()) {
+        setLength(length - 1)
+    }
+}

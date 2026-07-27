@@ -55,7 +55,7 @@ internal data class ReaderPageSlice(
     val startLocator: ReaderTextLocator = ReaderTextLocator(chapterOrd = chapterOrd, absoluteOffset = startOffset),
     val endLocator: ReaderTextLocator = ReaderTextLocator(chapterOrd = chapterOrd, absoluteOffset = endOffset),
     val lines: List<ReaderTextLineInfo> = emptyList(),
-    val items: List<ReaderPageItem> = lines.map { ReaderPageItem.TextLine(it) },
+    val items: List<ReaderPageItem> = emptyList(),
 )
 
 internal sealed class ReaderPageItem {
@@ -146,11 +146,17 @@ internal data class ReaderTextLocator(
     val absoluteOffset: Int = 0,
 )
 
+internal data class EpubPageBatch(
+    val pages: List<ReaderPageSlice>,
+    val reachedChapterStart: Boolean,
+    val reachedChapterEnd: Boolean,
+)
+
 internal data class ReaderTextLineInfo(
     val startOffset: Int,
     val endOffset: Int,
     val text: String = "",
-    val tokens: List<String> = emptyList(),
+    val tokenCount: Int = 0,
     val chapterOrd: Int = 0,
     val chapterHref: String? = null,
     val chapterTitle: String = "",
@@ -307,7 +313,6 @@ internal fun rememberReaderPaginationSpec(
 
 internal suspend fun ReaderDocument.paginateForReader(
     spec: ReaderPaginationSpec,
-    onPagesChanged: (List<ReaderPageSlice>) -> Unit = {},
 ): List<ReaderPageSlice> {
     val fallbackTitle = title.ifBlank { spec.fallbackTitle }
     if (!isReadable) return listOf(ReaderPageSlice(fallbackTitle, 0, 0))
@@ -317,7 +322,7 @@ internal suspend fun ReaderDocument.paginateForReader(
     val chapterTitleSpec = spec.forChapterTitle()
     val chapterTitleMeasurePool = ReaderCharacterMeasurePool(chapterTitleSpec)
     val pages = mutableListOf<ReaderPageSlice>()
-    val pageItems = mutableListOf<ReaderPageItem>()
+    var pageItems = mutableListOf<ReaderPageItem>()
     var pageHeightPx = 0f
 
     fun lineHeightForPaging(line: ReaderTextLineInfo): Float =
@@ -343,7 +348,9 @@ internal suspend fun ReaderDocument.paginateForReader(
         if (pageItems.isEmpty() && !force) return
         val firstItem = pageItems.firstOrNull()
         val lastItem = pageItems.lastOrNull()
-        val pageLines = pageItems.mapNotNull { (it as? ReaderPageItem.TextLine)?.line }
+        val committedItems = pageItems
+        val pageLines = committedItems.mapNotNull { (it as? ReaderPageItem.TextLine)?.line }
+        val containsImage = committedItems.any { it is ReaderPageItem.ImageBlock }
         pages += ReaderPageSlice(
             chapterTitle = firstItem?.chapterTitle ?: fallbackTitle,
             startOffset = firstItem?.startOffset ?: 0,
@@ -352,12 +359,11 @@ internal suspend fun ReaderDocument.paginateForReader(
             chapterHref = firstItem?.chapterHref,
             startLocator = firstItem?.startLocator ?: ReaderTextLocator(),
             endLocator = lastItem?.endLocator ?: firstItem?.startLocator ?: ReaderTextLocator(),
-            lines = pageLines.toList(),
-            items = pageItems.toList(),
+            lines = pageLines,
+            items = if (containsImage) committedItems else emptyList(),
         )
-        pageItems.clear()
+        pageItems = mutableListOf()
         pageHeightPx = 0f
-        onPagesChanged(pages.toList())
         if (pages.size % 16 == 0) {
             yield()
         }
@@ -420,15 +426,453 @@ internal suspend fun ReaderDocument.paginateForReader(
     return pages.ifEmpty { listOf(ReaderPageSlice(fallbackTitle, 0, 0)) }
 }
 
+internal fun ReaderDocument.epubChapterStartLocator(): ReaderTextLocator? {
+    val chapter = flow?.chapters?.firstOrNull() ?: return null
+    val firstBlock = chapter.blocks.firstOrNull()
+    return if (
+        chapter.title.isNotBlank() &&
+        chapter.titleEndOffset > chapter.titleStartOffset
+    ) {
+        ReaderTextLocator(
+            chapterOrd = chapter.ord,
+            chapterHref = chapter.href,
+            unitIndex = ChapterTitleUnitIndex,
+            textOffset = 0,
+            absoluteOffset = chapter.titleStartOffset,
+        )
+    } else {
+        ReaderTextLocator(
+            chapterOrd = chapter.ord,
+            chapterHref = chapter.href,
+            unitIndex = firstBlock?.unitIndex ?: 0,
+            textOffset = 0,
+            absoluteOffset = firstBlock?.absoluteStart ?: 0,
+        )
+    }
+}
+
+internal fun ReaderDocument.epubChapterEndLocator(): ReaderTextLocator? {
+    val chapter = flow?.chapters?.firstOrNull() ?: return null
+    val lastBlock = chapter.blocks.lastOrNull()
+    return when (lastBlock) {
+        is ReaderContentBlock.Text -> ReaderTextLocator(
+            chapterOrd = chapter.ord,
+            chapterHref = chapter.href,
+            unitIndex = lastBlock.unitIndex,
+            textOffset = lastBlock.text.length,
+            absoluteOffset = lastBlock.absoluteEnd,
+        )
+        is ReaderContentBlock.Image -> ReaderTextLocator(
+            chapterOrd = chapter.ord,
+            chapterHref = chapter.href,
+            unitIndex = lastBlock.unitIndex + 1,
+            textOffset = 0,
+            absoluteOffset = lastBlock.absoluteEnd,
+        )
+        null -> ReaderTextLocator(
+            chapterOrd = chapter.ord,
+            chapterHref = chapter.href,
+            unitIndex = 0,
+            textOffset = 0,
+            absoluteOffset = chapter.titleEndOffset,
+        )
+    }
+}
+
+/**
+ * Paginates only a bounded number of pages after [startLocator].
+ *
+ * Unlike [paginateForReader], this function stops measuring as soon as the
+ * requested window is full. It is the primitive used by the EPUB cursor
+ * session; it must never be replaced with "paginate chapter/book then slice".
+ */
+internal suspend fun ReaderDocument.paginateEpubForward(
+    spec: ReaderPaginationSpec,
+    startLocator: ReaderTextLocator? = null,
+    maxPages: Int,
+): EpubPageBatch {
+    val pageLimit = maxPages.coerceAtLeast(1)
+    val fallbackTitle = title.ifBlank { spec.fallbackTitle }
+    val chapter = flow
+        ?.toReaderTextDocument(fallbackTitle)
+        ?.chapters
+        ?.firstOrNull()
+        ?: return EpubPageBatch(
+            pages = listOf(ReaderPageSlice(fallbackTitle, 0, 0)),
+            reachedChapterStart = true,
+            reachedChapterEnd = true,
+        )
+    val chapterStart = chapter.startLocator()
+    val chapterEnd = chapter.endLocator()
+    val requestedStart = (startLocator ?: chapterStart).inChapter(chapter)
+    val measurePool = ReaderCharacterMeasurePool(spec)
+    val titleSpec = spec.forChapterTitle()
+    val titleMeasurePool = ReaderCharacterMeasurePool(titleSpec)
+    val pages = mutableListOf<ReaderPageSlice>()
+    var pageItems = mutableListOf<ReaderPageItem>()
+    var pageHeightPx = 0f
+    var stoppedAtLimit = false
+
+    fun itemHeight(item: ReaderPageItem): Float =
+        when (item) {
+            is ReaderPageItem.TextLine -> item.line.lineHeightPx
+                .coerceAtLeast(spec.minimumLineHeightPx * 0.5f)
+            is ReaderPageItem.ImageBlock -> item.image.heightPx
+        }
+
+    fun trimTrailingBlankLines() {
+        while ((pageItems.lastOrNull() as? ReaderPageItem.TextLine)?.line?.isBlank == true) {
+            pageHeightPx -= itemHeight(pageItems.removeAt(pageItems.lastIndex))
+        }
+        pageHeightPx = pageHeightPx.coerceAtLeast(0f)
+    }
+
+    suspend fun flushPage(): Boolean {
+        trimTrailingBlankLines()
+        if (pageItems.isEmpty()) return true
+        pages += pageItems.toReaderPageSlice(fallbackTitle)
+        pageItems = mutableListOf()
+        pageHeightPx = 0f
+        if (pages.size % 4 == 0) yield()
+        return pages.size < pageLimit
+    }
+
+    suspend fun append(item: ReaderPageItem): Boolean {
+        var pending = item
+        while (true) {
+            val height = itemHeight(pending)
+            val isBlank = (pending as? ReaderPageItem.TextLine)?.line?.isBlank == true
+            if (isBlank) {
+                if (pageItems.isNotEmpty() && pageHeightPx + height <= spec.bodyHeightPx) {
+                    pageItems += pending
+                    pageHeightPx += height
+                }
+                return true
+            }
+            if (pageItems.isEmpty() || pageHeightPx + height <= spec.bodyHeightPx) {
+                pageItems += pending
+                pageHeightPx += height
+                return true
+            }
+            trimTrailingBlankLines()
+            if (pageItems.isEmpty() || pageHeightPx + height <= spec.bodyHeightPx) {
+                pageItems += pending
+                pageHeightPx += height
+                return true
+            }
+            if (!flushPage()) {
+                stoppedAtLimit = true
+                return false
+            }
+            pending = when {
+                pending is ReaderPageItem.TextLine && pending.line.lineHeightPx > spec.bodyHeightPx ->
+                    ReaderPageItem.TextLine(pending.line.copy(lineHeightPx = spec.bodyHeightPx.toFloat()))
+                pending is ReaderPageItem.ImageBlock && pending.image.heightPx > spec.bodyHeightPx ->
+                    ReaderPageItem.ImageBlock(pending.image.copy(heightPx = spec.bodyHeightPx.toFloat()))
+                else -> pending
+            }
+        }
+    }
+
+    suspend fun appendLines(lines: List<ReaderTextLineInfo>): Boolean {
+        for (line in lines) {
+            if (!append(ReaderPageItem.TextLine(line))) return false
+        }
+        return true
+    }
+
+    val titleStartOffset = if (requestedStart.unitIndex == ChapterTitleUnitIndex) {
+        requestedStart.textOffset.coerceIn(0, chapter.title.length)
+    } else {
+        chapter.title.length
+    }
+    if (requestedStart.unitIndex <= ChapterTitleUnitIndex && titleStartOffset < chapter.title.length) {
+        val titleLines = chapter.titleLines(
+            spec = titleSpec,
+            measurePool = titleMeasurePool,
+            startTextOffset = titleStartOffset,
+            maxLines = pageLimit * (spec.linesPerPage + 2),
+        )
+        if (!appendLines(titleLines)) {
+            return EpubPageBatch(
+                pages = pages
+                    .withRequestedStart(requestedStart)
+                    .withChainedStarts(),
+                reachedChapterStart = requestedStart.logicalCompare(chapterStart) <= 0,
+                reachedChapterEnd = false,
+            )
+        }
+    }
+
+    val maximumMeasuredLines = pageLimit * (spec.linesPerPage * 2 + 8) + 8
+    chapter.blocks.forEach { block ->
+        if (stoppedAtLimit) return@forEach
+        if (block.unitIndex < requestedStart.unitIndex) return@forEach
+        when (block) {
+            is ReaderChapterBlock.Paragraph -> {
+                val paragraph = block.paragraph
+                var paragraphCursor = if (paragraph.unitIndex == requestedStart.unitIndex) {
+                    requestedStart.textOffset.coerceIn(0, paragraph.text.length)
+                } else {
+                    0
+                }
+                val characterWindow = (
+                    (spec.bodyWidthPx / spec.fontPx.coerceAtLeast(1f)) *
+                        maximumMeasuredLines *
+                        2f
+                    ).roundToInt().coerceAtLeast(512)
+                if (paragraphCursor >= paragraph.text.length && paragraph.isBlank) {
+                    val lines = paragraph.toTextLines(
+                        spec = spec,
+                        measurePool = measurePool,
+                        startTextOffset = paragraphCursor,
+                        maxLines = maximumMeasuredLines,
+                    )
+                    if (!appendLines(lines)) stoppedAtLimit = true
+                }
+                while (paragraphCursor < paragraph.text.length && !stoppedAtLimit) {
+                    val chunkEnd = (paragraphCursor + characterWindow)
+                        .coerceAtMost(paragraph.text.length)
+                    val lines = paragraph.toTextLines(
+                        spec = spec,
+                        measurePool = measurePool,
+                        startTextOffset = paragraphCursor,
+                        endTextOffset = chunkEnd,
+                        maxLines = maximumMeasuredLines,
+                    )
+                    if (!appendLines(lines)) {
+                        stoppedAtLimit = true
+                        break
+                    }
+                    val nextCursor = lines
+                        .lastOrNull()
+                        ?.endLocator
+                        ?.textOffset
+                        ?.coerceAtMost(chunkEnd)
+                        ?: chunkEnd
+                    paragraphCursor = if (nextCursor > paragraphCursor) {
+                        nextCursor
+                    } else {
+                        chunkEnd
+                    }
+                }
+            }
+            is ReaderChapterBlock.Image -> {
+                if (
+                    block.image.unitIndex > requestedStart.unitIndex ||
+                    requestedStart.textOffset <= 0
+                ) {
+                    if (!append(ReaderPageItem.ImageBlock(block.image.toImageBlockInfo(spec)))) {
+                        stoppedAtLimit = true
+                    }
+                }
+            }
+        }
+    }
+    if (!stoppedAtLimit && pages.size < pageLimit) {
+        flushPage()
+    }
+
+    val committedPages = pages
+        .withRequestedStart(requestedStart)
+        .withChainedStarts()
+    return EpubPageBatch(
+        pages = committedPages,
+        reachedChapterStart = requestedStart.logicalCompare(chapterStart) <= 0,
+        reachedChapterEnd = committedPages
+            .lastOrNull()
+            ?.endLocator
+            ?.logicalCompare(chapterEnd)
+            ?.let { it >= 0 }
+            ?: (requestedStart.logicalCompare(chapterEnd) >= 0),
+    )
+}
+
+/**
+ * Paginates a bounded window immediately before [endLocator].
+ *
+ * Paragraphs are measured from a bounded suffix when the cursor lies inside a
+ * very large paragraph, so reverse navigation cannot accidentally materialize
+ * an entire chapter.
+ */
+internal suspend fun ReaderDocument.paginateEpubBackward(
+    spec: ReaderPaginationSpec,
+    endLocator: ReaderTextLocator? = null,
+    maxPages: Int,
+): EpubPageBatch {
+    val pageLimit = maxPages.coerceAtLeast(1)
+    val fallbackTitle = title.ifBlank { spec.fallbackTitle }
+    val chapter = flow
+        ?.toReaderTextDocument(fallbackTitle)
+        ?.chapters
+        ?.firstOrNull()
+        ?: return EpubPageBatch(
+            pages = listOf(ReaderPageSlice(fallbackTitle, 0, 0)),
+            reachedChapterStart = true,
+            reachedChapterEnd = true,
+        )
+    val chapterStart = chapter.startLocator()
+    val chapterEnd = chapter.endLocator()
+    val requestedEnd = (endLocator ?: chapterEnd).inChapter(chapter)
+    val measurePool = ReaderCharacterMeasurePool(spec)
+    val titleSpec = spec.forChapterTitle()
+    val titleMeasurePool = ReaderCharacterMeasurePool(titleSpec)
+    val reversePages = mutableListOf<ReaderPageSlice>()
+    var reverseItems = mutableListOf<ReaderPageItem>()
+    var pageHeightPx = 0f
+    var stoppedAtLimit = false
+
+    fun itemHeight(item: ReaderPageItem): Float =
+        when (item) {
+            is ReaderPageItem.TextLine -> item.line.lineHeightPx
+                .coerceAtLeast(spec.minimumLineHeightPx * 0.5f)
+            is ReaderPageItem.ImageBlock -> item.image.heightPx
+        }
+
+    fun trimPageStartBlanks() {
+        while ((reverseItems.lastOrNull() as? ReaderPageItem.TextLine)?.line?.isBlank == true) {
+            pageHeightPx -= itemHeight(reverseItems.removeAt(reverseItems.lastIndex))
+        }
+        pageHeightPx = pageHeightPx.coerceAtLeast(0f)
+    }
+
+    suspend fun flushReversePage(): Boolean {
+        trimPageStartBlanks()
+        if (reverseItems.isEmpty()) return true
+        reversePages += reverseItems.asReversed().toReaderPageSlice(fallbackTitle)
+        reverseItems = mutableListOf()
+        pageHeightPx = 0f
+        if (reversePages.size % 4 == 0) yield()
+        return reversePages.size < pageLimit
+    }
+
+    suspend fun prepend(item: ReaderPageItem): Boolean {
+        val height = itemHeight(item)
+        val isBlank = (item as? ReaderPageItem.TextLine)?.line?.isBlank == true
+        if (isBlank && reverseItems.isEmpty()) return true
+        if (reverseItems.isEmpty() || pageHeightPx + height <= spec.bodyHeightPx) {
+            reverseItems += item
+            pageHeightPx += height
+            return true
+        }
+        if (!flushReversePage()) {
+            stoppedAtLimit = true
+            return false
+        }
+        reverseItems += when {
+            item is ReaderPageItem.TextLine && item.line.lineHeightPx > spec.bodyHeightPx ->
+                ReaderPageItem.TextLine(item.line.copy(lineHeightPx = spec.bodyHeightPx.toFloat()))
+            item is ReaderPageItem.ImageBlock && item.image.heightPx > spec.bodyHeightPx ->
+                ReaderPageItem.ImageBlock(item.image.copy(heightPx = spec.bodyHeightPx.toFloat()))
+            else -> item
+        }
+        pageHeightPx = itemHeight(reverseItems.last())
+        return true
+    }
+
+    val targetLineCount = pageLimit * (spec.linesPerPage + 3)
+    for (blockIndex in chapter.blocks.indices.reversed()) {
+        if (stoppedAtLimit) break
+        val block = chapter.blocks[blockIndex]
+        if (block.unitIndex > requestedEnd.unitIndex) continue
+        when (block) {
+            is ReaderChapterBlock.Paragraph -> {
+                val paragraph = block.paragraph
+                val endTextOffset = if (paragraph.unitIndex == requestedEnd.unitIndex) {
+                    requestedEnd.textOffset.coerceIn(0, paragraph.text.length)
+                } else {
+                    paragraph.text.length
+                }
+                if (endTextOffset <= 0 && !paragraph.isBlank) continue
+                var charWindow = (
+                    (spec.bodyWidthPx / spec.fontPx.coerceAtLeast(1f)) *
+                        targetLineCount *
+                        2f
+                    ).roundToInt().coerceAtLeast(256)
+                var startTextOffset: Int
+                var lines: List<ReaderTextLineInfo>
+                while (true) {
+                    startTextOffset = (endTextOffset - charWindow).coerceAtLeast(0)
+                    lines = paragraph.toTextLines(
+                        spec = spec,
+                        measurePool = measurePool,
+                        startTextOffset = startTextOffset,
+                        endTextOffset = endTextOffset,
+                        maxLines = targetLineCount + 2,
+                    )
+                    if (startTextOffset == 0 || lines.size >= targetLineCount) break
+                    charWindow = (charWindow * 2).coerceAtMost(endTextOffset.coerceAtLeast(1))
+                }
+                for (line in lines.asReversed()) {
+                    if (!prepend(ReaderPageItem.TextLine(line))) break
+                }
+            }
+            is ReaderChapterBlock.Image -> {
+                if (
+                    block.image.unitIndex < requestedEnd.unitIndex ||
+                    requestedEnd.textOffset > 0
+                ) {
+                    prepend(ReaderPageItem.ImageBlock(block.image.toImageBlockInfo(spec)))
+                }
+            }
+        }
+    }
+
+    if (!stoppedAtLimit && requestedEnd.unitIndex >= ChapterTitleUnitIndex) {
+        val titleEndOffset = if (requestedEnd.unitIndex == ChapterTitleUnitIndex) {
+            requestedEnd.textOffset.coerceIn(0, chapter.title.length)
+        } else {
+            chapter.title.length
+        }
+        val titleLines = chapter.titleLines(
+            spec = titleSpec,
+            measurePool = titleMeasurePool,
+            endTextOffset = titleEndOffset,
+            maxLines = targetLineCount,
+        )
+        for (line in titleLines.asReversed()) {
+            if (!prepend(ReaderPageItem.TextLine(line))) break
+        }
+    }
+    if (!stoppedAtLimit && reversePages.size < pageLimit) {
+        flushReversePage()
+    }
+
+    val committedPages = reversePages
+        .asReversed()
+        .withChainedStarts()
+        .withRequestedEnd(requestedEnd)
+    return EpubPageBatch(
+        pages = committedPages,
+        reachedChapterStart = committedPages
+            .firstOrNull()
+            ?.startLocator
+            ?.logicalCompare(chapterStart)
+            ?.let { it <= 0 }
+            ?: (requestedEnd.logicalCompare(chapterStart) <= 0),
+        reachedChapterEnd = requestedEnd.logicalCompare(chapterEnd) >= 0,
+    )
+}
+
 private fun ReaderParagraph.toTextLines(
     spec: ReaderPaginationSpec,
     measurePool: ReaderCharacterMeasurePool,
+    startTextOffset: Int = 0,
+    endTextOffset: Int = text.length,
+    maxLines: Int = Int.MAX_VALUE,
 ): List<ReaderTextLineInfo> {
+    val boundedStart = startTextOffset.coerceIn(0, text.length)
+    val boundedEnd = endTextOffset.coerceIn(boundedStart, text.length)
+    if (boundedStart >= boundedEnd && !isBlank) return emptyList()
     if (isBlank || text.isBlank()) {
         return listOf(blankLine(spec))
     }
 
-    val glyphs = toGlyphs(measurePool)
+    val glyphs = toGlyphs(
+        measurePool = measurePool,
+        startTextOffset = boundedStart,
+        endTextOffset = boundedEnd,
+    )
     if (glyphs.isEmpty()) {
         return listOf(blankLine(spec))
     }
@@ -437,7 +881,7 @@ private fun ReaderParagraph.toTextLines(
     var lineStart = glyphs.skipWhitespace(0)
     var index = lineStart
     var width = 0f
-    var lineOrdinal = 0
+    var lineOrdinal = if (boundedStart == 0) 0 else 1
 
     fun currentLineLimit(): Float =
         (spec.bodyWidthPx - if (lineOrdinal == 0) spec.paragraphFirstLineIndentPx else 0f)
@@ -460,7 +904,7 @@ private fun ReaderParagraph.toTextLines(
         width = 0f
     }
 
-    while (index < glyphs.size) {
+    while (index < glyphs.size && lines.size < maxLines) {
         val glyph = glyphs[index]
         val lineLimit = currentLineLimit()
         val glyphWidth = glyphs.contextualWidthIncrement(index, lineStart, measurePool)
@@ -480,17 +924,17 @@ private fun ReaderParagraph.toTextLines(
         }
     }
 
-    if (lineStart < glyphs.size) {
+    if (lineStart < glyphs.size && lines.size < maxLines) {
         emitLine(glyphs.size)
     }
 
     val lastIndex = lines.lastIndex
     return lines.mapIndexed { indexInParagraph, line ->
-        val isFirst = indexInParagraph == 0
-        val isLast = indexInParagraph == lastIndex
+        val isFirst = boundedStart == 0 && indexInParagraph == 0
+        val isLast = boundedEnd == text.length && indexInParagraph == lastIndex
         val shouldJustify = !isLast &&
             line.fillRatio >= spec.justifyMinFillRatio &&
-            line.tokens.size >= MinimumJustifyTokenCount
+            line.tokenCount >= MinimumJustifyTokenCount
         line.copy(
             isParagraphFirst = isFirst,
             isParagraphLast = isLast,
@@ -523,7 +967,7 @@ private fun ReaderParagraph.createTextLineInfo(
         startOffset = startGlyph.absoluteStart,
         endOffset = endGlyph.absoluteEnd,
         text = text,
-        tokens = glyphs.toDrawTokens(),
+        tokenCount = glyphs.drawTokenCount(),
         chapterOrd = chapterOrd,
         chapterHref = chapterHref,
         chapterTitle = chapterTitle,
@@ -554,6 +998,9 @@ private fun ReaderPaginationSpec.forChapterTitle(): ReaderPaginationSpec =
 private fun ReaderChapter.titleLines(
     spec: ReaderPaginationSpec,
     measurePool: ReaderCharacterMeasurePool,
+    startTextOffset: Int = 0,
+    endTextOffset: Int = title.length,
+    maxLines: Int = Int.MAX_VALUE,
 ): List<ReaderTextLineInfo> {
     if (titleStartOffset >= titleEndOffset || title.isBlank()) return emptyList()
     return ReaderParagraph(
@@ -566,7 +1013,13 @@ private fun ReaderChapter.titleLines(
         absoluteEnd = titleEndOffset,
         text = title,
         isBlank = false,
-    ).toTextLines(spec, measurePool).map { line ->
+    ).toTextLines(
+        spec = spec,
+        measurePool = measurePool,
+        startTextOffset = startTextOffset,
+        endTextOffset = endTextOffset,
+        maxLines = maxLines,
+    ).map { line ->
         line.copy(
             shouldJustify = false,
             extraTokenSpacingPx = 0f,
@@ -587,7 +1040,7 @@ private fun ReaderParagraph.blankLine(spec: ReaderPaginationSpec): ReaderTextLin
         startOffset = absoluteStart,
         endOffset = absoluteEnd,
         text = "",
-        tokens = emptyList(),
+        tokenCount = 0,
         chapterOrd = chapterOrd,
         chapterHref = chapterHref,
         chapterTitle = chapterTitle,
@@ -632,15 +1085,15 @@ private fun ReaderChapter.trailingBlankLine(spec: ReaderPaginationSpec): ReaderT
 }
 
 private fun ReaderTextLineInfo.calculateTokenSpacingPx(): Float =
-    if (tokens.size <= 1) {
+    if (tokenCount <= 1) {
         0f
     } else {
-        (availableWidthPx - widthPx) / (tokens.size - 1)
+        (availableWidthPx - widthPx) / (tokenCount - 1)
     }
 
 private fun ReaderTextLineInfo.adjustedWidthPx(): Float =
-    widthPx + if (shouldJustify && tokens.size > 1) {
-        extraTokenSpacingPx * (tokens.size - 1)
+    widthPx + if (shouldJustify && tokenCount > 1) {
+        extraTokenSpacingPx * (tokenCount - 1)
     } else {
         0f
     }
@@ -671,13 +1124,20 @@ private fun List<ReaderTextLineInfo>.fitLineWidths(): List<ReaderTextLineInfo> {
 private fun List<ReaderTextLineInfo>.totalLineHeightPx(): Float =
     fold(0f) { sum, line -> sum + line.lineHeightPx }
 
-private fun ReaderParagraph.toGlyphs(measurePool: ReaderCharacterMeasurePool): List<ReaderGlyph> {
-    return text.toChapterTextGlyphs(
+private fun ReaderParagraph.toGlyphs(
+    measurePool: ReaderCharacterMeasurePool,
+    startTextOffset: Int = 0,
+    endTextOffset: Int = text.length,
+): List<ReaderGlyph> {
+    val boundedStart = startTextOffset.coerceIn(0, text.length)
+    val boundedEnd = endTextOffset.coerceIn(boundedStart, text.length)
+    return text.substring(boundedStart, boundedEnd).toChapterTextGlyphs(
         chapterOrd = chapterOrd,
         chapterHref = chapterHref,
         unitIndex = unitIndex,
         paragraphIndex = paragraphIndex,
-        absoluteStart = absoluteStart,
+        absoluteStart = absoluteStart + boundedStart,
+        textOffsetBase = boundedStart,
         measurePool = measurePool,
     )
 }
@@ -688,6 +1148,7 @@ private fun String.toChapterTextGlyphs(
     unitIndex: Int,
     paragraphIndex: Int,
     absoluteStart: Int,
+    textOffsetBase: Int = 0,
     measurePool: ReaderCharacterMeasurePool,
 ): List<ReaderGlyph> {
     val glyphs = mutableListOf<ReaderGlyph>()
@@ -710,7 +1171,7 @@ private fun String.toChapterTextGlyphs(
                         paragraphIndex = paragraphIndex,
                         elementIndex = elementIndex,
                         charIndex = index - elementStart,
-                        textOffset = index,
+                        textOffset = textOffsetBase + index,
                         absoluteOffset = absoluteStart + index,
                     ),
                     metric = measurePool.measure(current),
@@ -731,7 +1192,7 @@ private fun String.toChapterTextGlyphs(
                     paragraphIndex = paragraphIndex,
                     elementIndex = elementIndex,
                     charIndex = 0,
-                    textOffset = index,
+                    textOffset = textOffsetBase + index,
                     absoluteOffset = absoluteStart + index,
                 ),
                 metric = measurePool.measure(char),
@@ -751,38 +1212,48 @@ private fun ReaderGlyph.endLocator(): ReaderTextLocator =
         absoluteOffset = absoluteEnd,
     )
 
-private fun List<ReaderGlyph>.toDrawTokens(): List<String> {
-    val tokens = mutableListOf<String>()
-    val builder = StringBuilder()
+private fun List<ReaderGlyph>.drawTokenCount(): Int {
+    var tokenCount = 0
     var currentElementIndex: Int? = null
-
-    fun flushBuilder() {
-        if (builder.isNotEmpty()) {
-            tokens += builder.toString()
-            builder.clear()
-        }
-        currentElementIndex = null
-    }
 
     for (glyph in this) {
         if (glyph.char.isWhitespace()) {
-            flushBuilder()
+            currentElementIndex = null
             continue
         }
         if (glyph.elementKind == ReaderTextElementKind.LatinWord) {
-            if (currentElementIndex == glyph.locator.elementIndex) {
-                builder.append(glyph.char)
-            } else {
-                flushBuilder()
+            if (currentElementIndex != glyph.locator.elementIndex) {
+                tokenCount++
                 currentElementIndex = glyph.locator.elementIndex
-                builder.append(glyph.char)
             }
         } else {
-            flushBuilder()
-            tokens += glyph.char.toString()
+            currentElementIndex = null
+            tokenCount++
         }
     }
-    flushBuilder()
+    return tokenCount
+}
+
+internal fun String.toReaderDrawTokens(): List<String> {
+    val tokens = mutableListOf<String>()
+    var index = 0
+    while (index < length) {
+        val char = this[index]
+        when {
+            char.isWhitespace() -> index++
+            char.isLatinWordChar() -> {
+                val start = index
+                do {
+                    index++
+                } while (index < length && this[index].isLatinWordChar())
+                tokens += substring(start, index)
+            }
+            else -> {
+                tokens += char.toString()
+                index++
+            }
+        }
+    }
     return tokens
 }
 
@@ -892,6 +1363,54 @@ private data class ReaderChapter(
     val absoluteEnd: Int,
     val blocks: List<ReaderChapterBlock>,
 )
+
+private fun ReaderChapter.startLocator(): ReaderTextLocator {
+    val firstBlock = blocks.firstOrNull()
+    return if (title.isNotBlank() && titleEndOffset > titleStartOffset) {
+        ReaderTextLocator(
+            chapterOrd = ord,
+            chapterHref = href,
+            unitIndex = ChapterTitleUnitIndex,
+            textOffset = 0,
+            absoluteOffset = titleStartOffset,
+        )
+    } else {
+        ReaderTextLocator(
+            chapterOrd = ord,
+            chapterHref = href,
+            unitIndex = firstBlock?.unitIndex ?: 0,
+            textOffset = 0,
+            absoluteOffset = firstBlock?.startOffset ?: 0,
+        )
+    }
+}
+
+private fun ReaderChapter.endLocator(): ReaderTextLocator {
+    val lastBlock = blocks.lastOrNull()
+    return when (lastBlock) {
+        is ReaderChapterBlock.Paragraph -> ReaderTextLocator(
+            chapterOrd = ord,
+            chapterHref = href,
+            unitIndex = lastBlock.paragraph.unitIndex,
+            textOffset = lastBlock.paragraph.text.length,
+            absoluteOffset = lastBlock.paragraph.absoluteEnd,
+        )
+        is ReaderChapterBlock.Image -> ReaderTextLocator(
+            chapterOrd = ord,
+            chapterHref = href,
+            unitIndex = lastBlock.image.unitIndex + 1,
+            textOffset = 0,
+            absoluteOffset = lastBlock.image.absoluteEnd,
+        )
+        null -> ReaderTextLocator(
+            chapterOrd = ord,
+            chapterHref = href,
+            unitIndex = 0,
+            textOffset = 0,
+            absoluteOffset = titleEndOffset,
+        )
+    }
+}
 
 private sealed class ReaderChapterBlock {
     data class Paragraph(
@@ -1079,6 +1598,96 @@ private val ReaderChapterBlock.endOffset: Int
         is ReaderChapterBlock.Image -> image.absoluteEnd
     }
 
+private val ReaderChapterBlock.startOffset: Int
+    get() = when (this) {
+        is ReaderChapterBlock.Paragraph -> paragraph.absoluteStart
+        is ReaderChapterBlock.Image -> image.absoluteStart
+    }
+
+private val ReaderChapterBlock.unitIndex: Int
+    get() = when (this) {
+        is ReaderChapterBlock.Paragraph -> paragraph.unitIndex
+        is ReaderChapterBlock.Image -> image.unitIndex
+    }
+
+private fun ReaderTextLocator.inChapter(chapter: ReaderChapter): ReaderTextLocator =
+    copy(
+        chapterOrd = chapter.ord,
+        chapterHref = chapter.href,
+    )
+
+private fun ReaderTextLocator.logicalCompare(other: ReaderTextLocator): Int =
+    when {
+        unitIndex != other.unitIndex -> unitIndex.compareTo(other.unitIndex)
+        else -> textOffset.compareTo(other.textOffset)
+    }
+
+private fun List<ReaderPageItem>.toReaderPageSlice(fallbackTitle: String): ReaderPageSlice {
+    val firstItem = firstOrNull()
+    val lastItem = lastOrNull()
+    val pageLines = mapNotNull { (it as? ReaderPageItem.TextLine)?.line }
+    return ReaderPageSlice(
+        chapterTitle = firstItem?.chapterTitle ?: fallbackTitle,
+        startOffset = firstItem?.startOffset ?: 0,
+        endOffset = lastItem?.endOffset ?: firstItem?.startOffset ?: 0,
+        chapterOrd = firstItem?.chapterOrd ?: 0,
+        chapterHref = firstItem?.chapterHref,
+        startLocator = firstItem?.startLocator ?: ReaderTextLocator(),
+        endLocator = lastItem?.endLocator ?: firstItem?.startLocator ?: ReaderTextLocator(),
+        lines = pageLines,
+        items = if (any { it is ReaderPageItem.ImageBlock }) this else emptyList(),
+    )
+}
+
+private fun List<ReaderPageSlice>.withRequestedStart(
+    requestedStart: ReaderTextLocator,
+): List<ReaderPageSlice> =
+    if (isEmpty()) {
+        this
+    } else {
+        mapIndexed { index, page ->
+            if (index == 0) {
+                page.copy(
+                    startLocator = requestedStart,
+                    startOffset = min(page.startOffset, requestedStart.absoluteOffset),
+                )
+            } else {
+                page
+            }
+        }
+    }
+
+private fun List<ReaderPageSlice>.withRequestedEnd(
+    requestedEnd: ReaderTextLocator,
+): List<ReaderPageSlice> =
+    if (isEmpty()) {
+        this
+    } else {
+        mapIndexed { index, page ->
+            if (index == lastIndex) {
+                page.copy(
+                    endLocator = requestedEnd,
+                    endOffset = max(page.endOffset, requestedEnd.absoluteOffset),
+                )
+            } else {
+                page
+            }
+        }
+    }
+
+private fun List<ReaderPageSlice>.withChainedStarts(): List<ReaderPageSlice> =
+    mapIndexed { index, page ->
+        val previous = getOrNull(index - 1)
+        if (previous == null) {
+            page
+        } else {
+            page.copy(
+                startLocator = previous.endLocator,
+                startOffset = min(page.startOffset, previous.endOffset),
+            )
+        }
+    }
+
 private fun ReaderChapterImage.toImageBlockInfo(spec: ReaderPaginationSpec): ReaderImageBlockInfo {
     val maxHeight = spec.bodyHeightPx * 0.72f
     val targetHeight = if (resource.widthPx != null && resource.heightPx != null) {
@@ -1104,7 +1713,11 @@ private fun ReaderChapterImage.toImageBlockInfo(spec: ReaderPaginationSpec): Rea
         heightPx = targetHeight,
         availableWidthPx = spec.bodyWidthPx.toFloat(),
         startLocator = locator,
-        endLocator = locator,
+        endLocator = locator.copy(
+            unitIndex = unitIndex + 1,
+            textOffset = 0,
+            absoluteOffset = absoluteEnd,
+        ),
     )
 }
 

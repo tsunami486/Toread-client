@@ -17,6 +17,7 @@ import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.snapshots.Snapshot
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
@@ -63,6 +64,7 @@ import com.example.toread.ui.reader.rememberReaderPaginationSpec
 import com.example.toread.ui.reader.saveReaderProgress
 import com.example.toread.ui.reader.toPageIndex
 import com.example.toread.ui.text.ToreadStrings
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -97,6 +99,21 @@ internal fun ReaderPage(
         )
         return
     }
+    if (book?.format?.equals("epub", ignoreCase = true) == true) {
+        EpubReaderPage(
+            book = book,
+            platform = platform,
+            bookshelfRepository = bookshelfRepository,
+            progressRepository = progressRepository,
+            progressSyncScheduler = progressSyncScheduler,
+            remoteProgressSource = remoteProgressSource,
+            progressSaveScope = progressSaveScope,
+            readerContentLoader = readerContentLoader,
+            onProgressSyncFinished = onProgressSyncFinished,
+            onBack = onBack,
+        )
+        return
+    }
 
     val isAndroid = platform.kind == PlatformKind.Android
     val isDesktop = platform.kind == PlatformKind.Desktop
@@ -113,6 +130,7 @@ internal fun ReaderPage(
         0
     }
     var document by remember(book?.bookHash) { mutableStateOf<ReaderDocument?>(null) }
+    var paginatedDocument by remember(book?.bookHash) { mutableStateOf<ReaderDocument?>(null) }
     var restoredLocator by remember(book?.bookHash) { mutableStateOf<BookLocator?>(null) }
     var restoredForMeasuredPages by remember(book?.bookHash) { mutableStateOf(false) }
     var pageIndex by remember(book?.bookHash) { mutableIntStateOf(0) }
@@ -133,7 +151,11 @@ internal fun ReaderPage(
 
     PlatformBackHandler(enabled = isAndroid) {
         val currentBook = book
-        if (currentBook != null && measuredPages.isNotEmpty()) {
+        val displayedDocument = paginatedDocument ?: document
+        if (
+            currentBook != null &&
+            measuredPages.isNotEmpty()
+        ) {
             val targetPage = pageIndex.coerceIn(0, measuredPages.lastIndex.coerceAtLeast(0))
             saveReaderProgress(
                 scope = progressSaveScope,
@@ -142,12 +164,8 @@ internal fun ReaderPage(
                 remoteSyncPolicy = ReaderProgressRemoteSyncPolicy.Immediate,
                 book = currentBook,
                 pageIndex = targetPage,
-                pageCount = measuredPages.size,
-                charOffset = measuredPages.getOrNull(targetPage)?.startOffset ?: 0,
-                chapterOrd = measuredPages.getOrNull(targetPage)?.chapterOrd,
-                startLocator = measuredPages.getOrNull(targetPage)?.startLocator,
-                chapterHref = measuredPages.getOrNull(targetPage)?.chapterHref,
-                sourceLength = document?.text?.length ?: 0,
+                pages = measuredPages,
+                sourceLength = displayedDocument?.text?.length ?: 0,
                 deviceId = platform.name,
                 onSyncFinished = onProgressSyncFinished,
             )
@@ -158,6 +176,7 @@ internal fun ReaderPage(
     LaunchedEffect(book?.bookHash) {
         if (book == null) return@LaunchedEffect
         document = null
+        paginatedDocument = null
         error = null
         restoredLocator = null
         restoredForMeasuredPages = false
@@ -168,18 +187,16 @@ internal fun ReaderPage(
         )
         restoredLocator = openingProgress?.locator
             ?: bookshelfRepository?.progressLocator(book.bookHash)
-        runCatching {
-            withContext(Dispatchers.Default) {
+
+        try {
+            val loaded = withContext(Dispatchers.Default) {
                 readerContentLoader.load(book.filePath, book.format, book.title)
             }
-        }.fold(
-            onSuccess = { loaded ->
-                document = loaded
-            },
-            onFailure = { throwable ->
-                error = ToreadStrings.openBookFailed(throwable.message)
-            },
-        )
+            document = loaded
+        } catch (throwable: Throwable) {
+            if (throwable is CancellationException) throw throwable
+            error = ToreadStrings.openBookFailed(throwable.message)
+        }
     }
 
     LaunchedEffect(book?.bookHash, remoteProgressSource, progressRepository) {
@@ -254,20 +271,100 @@ internal fun ReaderPage(
                     bottomReservedPx = bottomGestureReservePx,
                 )
 
+                val desktopPageStep = if (isDesktop && desktopDoublePageEnabled) 2 else 1
+                val normalizeForDoublePage = isDesktop && desktopDoublePageEnabled
+
                 LaunchedEffect(loadedDocument.text, spec) {
-                    measuredPages = emptyList()
-                    paginationComplete = false
-                    restoredForMeasuredPages = false
-                    desktopReaderFocusReady = false
-                    measuredPages = withContext(Dispatchers.Default) {
-                        loadedDocument.paginateForReader(spec)
+                    val hadDisplayedPages = paginatedDocument != null && measuredPages.isNotEmpty()
+                    if (!hadDisplayedPages) {
+                        measuredPages = emptyList()
+                        paginationComplete = false
+                        desktopReaderFocusReady = false
                     }
-                    paginationComplete = true
+                    val nextPages = try {
+                        withContext(Dispatchers.Default) {
+                            loadedDocument.paginateForReader(spec)
+                        }
+                    } catch (throwable: Throwable) {
+                        if (throwable is CancellationException) throw throwable
+                        ToreadClientLog.warn(
+                            LogArea,
+                            "reader.pagination.fail",
+                            "bookHash" to book.bookHash,
+                            "format" to loadedDocument.format,
+                            "error" to throwable.message,
+                        )
+                        if (!hadDisplayedPages) {
+                            error = ToreadStrings.openBookFailed(throwable.message)
+                        }
+                        return@LaunchedEffect
+                    }
+                    if (nextPages.isEmpty()) {
+                        if (!hadDisplayedPages) {
+                            error = ToreadStrings.openBookFailed("分页结果为空")
+                        }
+                        return@LaunchedEffect
+                    }
+
+                    val previousPages = measuredPages
+                    val previousPageIndex = pageIndex.coerceIn(
+                        0,
+                        previousPages.lastIndex.coerceAtLeast(0),
+                    )
+                    val requestedLocator = if (
+                        hasUserNavigated &&
+                        previousPages.isNotEmpty()
+                    ) {
+                        TxtLocator(
+                            charOffset = previousPages[previousPageIndex].startOffset.toLong(),
+                            globalProgress = if (loadedDocument.text.isNotEmpty()) {
+                                previousPages[previousPageIndex]
+                                    .startOffset
+                                    .toDouble()
+                                    .div(loadedDocument.text.length.toDouble())
+                                    .coerceIn(0.0, 1.0)
+                            } else {
+                                previousPageIndex.pageProgress(previousPages.size)
+                            },
+                        )
+                    } else {
+                        restoredLocator
+                    }
+                    val requestedPage = requestedLocator?.toPageIndex(nextPages) ?: 0
+                    val normalizeForCurrentPageMode =
+                        isDesktop && desktopDoublePageEnabled
+                    val normalizedPage = normalizePageIndex(
+                        requestedPage,
+                        nextPages.size,
+                        normalizeForCurrentPageMode,
+                    )
+                    val chosenPage = nextPages.getOrNull(normalizedPage)
+
+                    Snapshot.withMutableSnapshot {
+                        restoredLocator = requestedLocator
+                        pageIndex = normalizedPage
+                        paginatedDocument = loadedDocument
+                        measuredPages = nextPages
+                        restoredForMeasuredPages = true
+                        paginationComplete = true
+                    }
+                    ToreadClientLog.info(
+                        LogArea,
+                        "reader.seek",
+                        "bookHash" to book.bookHash,
+                        "locator" to requestedLocator.describeLocator(),
+                        "targetCharOffset" to requestedLocator.readerCharOffset(),
+                        "requestedPage" to requestedPage,
+                        "chosenPage" to normalizedPage,
+                        "chosenPageStartOffset" to chosenPage?.startOffset,
+                        "chosenPageEndOffset" to chosenPage?.endOffset,
+                        "pageCount" to nextPages.size,
+                        "platform" to if (isDesktop) "desktop" else "android",
+                    )
                 }
 
                 val pages = measuredPages
-                val desktopPageStep = if (isDesktop && desktopDoublePageEnabled) 2 else 1
-                val normalizeForDoublePage = isDesktop && desktopDoublePageEnabled
+                val displayedDocument = paginatedDocument ?: loadedDocument
 
                 LaunchedEffect(
                     book.bookHash,
@@ -277,7 +374,8 @@ internal fun ReaderPage(
                     paginationComplete,
                 ) {
                     if (!restoredForMeasuredPages && pages.isNotEmpty() && paginationComplete) {
-                        val requestedPage = restoredLocator?.toPageIndex(pages) ?: 0
+                        val locator = restoredLocator
+                        val requestedPage = locator?.toPageIndex(pages) ?: 0
                         val normalizedPage = normalizePageIndex(
                             requestedPage,
                             pages.size,
@@ -316,12 +414,8 @@ internal fun ReaderPage(
                         remoteSyncPolicy = remoteSyncPolicy,
                         book = book,
                         pageIndex = targetPage,
-                        pageCount = pages.size,
-                        charOffset = pages.getOrNull(targetPage)?.startOffset ?: 0,
-                        chapterOrd = pages.getOrNull(targetPage)?.chapterOrd,
-                        startLocator = pages.getOrNull(targetPage)?.startLocator,
-                        chapterHref = pages.getOrNull(targetPage)?.chapterHref,
-                        sourceLength = loadedDocument.text.length,
+                        pages = pages,
+                        sourceLength = displayedDocument.text.length,
                         deviceId = platform.name,
                         onSyncFinished = if (remoteSyncPolicy == ReaderProgressRemoteSyncPolicy.Immediate) {
                             onProgressSyncFinished
@@ -332,6 +426,7 @@ internal fun ReaderPage(
                 }
 
                 fun goToPage(target: Int) {
+                    if (paginatedDocument !== displayedDocument || measuredPages !== pages) return
                     if (pages.isEmpty()) return
                     val normalized = normalizePageIndex(target, pages.size, normalizeForDoublePage)
                     if (normalized == pageIndex) return
@@ -344,15 +439,42 @@ internal fun ReaderPage(
                 }
 
                 fun exitReader() {
-                    saveCurrentProgress(remoteSyncPolicy = ReaderProgressRemoteSyncPolicy.Immediate)
+                    val currentDocument = paginatedDocument ?: document
+                    val currentPages = measuredPages
+                    if (
+                        currentDocument != null &&
+                        currentPages.isNotEmpty()
+                    ) {
+                        val targetPage = pageIndex.coerceIn(
+                            0,
+                            currentPages.lastIndex.coerceAtLeast(0),
+                        )
+                        saveReaderProgress(
+                            scope = progressSaveScope,
+                            progressRepository = progressRepository,
+                            progressSyncScheduler = progressSyncScheduler,
+                            remoteSyncPolicy = ReaderProgressRemoteSyncPolicy.Immediate,
+                            book = book,
+                            pageIndex = targetPage,
+                            pages = currentPages,
+                            sourceLength = currentDocument.text.length,
+                            deviceId = platform.name,
+                            onSyncFinished = onProgressSyncFinished,
+                        )
+                    }
                     exitReaderWithoutProgress()
                 }
 
                 fun toggleDesktopPageMode() {
                     val nextDoublePage = !desktopDoublePageEnabled
                     desktopDoublePageEnabled = nextDoublePage
-                    if (pages.isNotEmpty()) {
-                        pageIndex = normalizePageIndex(pageIndex, pages.size, isDesktop && nextDoublePage)
+                    val currentPages = measuredPages
+                    if (currentPages.isNotEmpty()) {
+                        pageIndex = normalizePageIndex(
+                            pageIndex,
+                            currentPages.size,
+                            isDesktop && nextDoublePage,
+                        )
                     }
                 }
 
@@ -395,7 +517,7 @@ internal fun ReaderPage(
                     } else if (isDesktop) {
                         DesktopReaderLayout(
                             book = book,
-                            sourceText = loadedDocument.text,
+                            sourceText = displayedDocument.text,
                             pages = pages,
                             pageIndex = currentPageIndex,
                             progress = progress,
@@ -416,7 +538,7 @@ internal fun ReaderPage(
                     } else {
                         AndroidReaderLayout(
                             book = book,
-                            sourceText = loadedDocument.text,
+                            sourceText = displayedDocument.text,
                             pages = pages,
                             pageIndex = currentPageIndex,
                             progress = progress,
@@ -442,7 +564,7 @@ internal fun ReaderPage(
 }
 
 @Composable
-private fun ReaderLoadingIndicator() {
+internal fun ReaderLoadingIndicator() {
     Box(
         modifier = Modifier.fillMaxSize(),
         contentAlignment = Alignment.Center,

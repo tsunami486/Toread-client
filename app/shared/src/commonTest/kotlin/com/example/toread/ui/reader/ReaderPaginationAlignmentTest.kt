@@ -1,8 +1,9 @@
 package com.example.toread.ui.reader
 
+import com.example.toread.reader.EpubImageResource
+import com.example.toread.reader.EpubLocator
 import com.example.toread.reader.ReaderContentBlock
 import com.example.toread.reader.ReaderDocument
-import com.example.toread.reader.EpubLocator
 import com.example.toread.reader.ReaderFlowChapter
 import com.example.toread.reader.ReaderFlowDocument
 import kotlinx.coroutines.runBlocking
@@ -36,7 +37,7 @@ class ReaderPaginationAlignmentTest {
         assertTrue(lines.any { it.isParagraphFirst })
         assertTrue(lines.any { it.isParagraphLast })
         assertTrue(lines.filter { it.shouldJustify }.all { line ->
-            line.tokens.size > 1 &&
+            line.tokenCount > 1 &&
                 (line.extraTokenSpacingPx != 0f || line.adjustedWidthPxForTest() <= line.availableWidthPx + 0.5f)
         })
         assertTrue(lines.all { line ->
@@ -45,6 +46,130 @@ class ReaderPaginationAlignmentTest {
 
         val shortTailLine = lines.first { it.textFrom(source).contains("短尾") }
         assertFalse(shortTailLine.shouldJustify)
+    }
+
+    @Test
+    fun readerDrawTokensPreserveMixedTextGroupingAndIgnoreWhitespace() {
+        assertEquals(
+            listOf("中", "English_word's", "文", "，", "123", "!", "。", "”"),
+            "中 \tEnglish_word's\n文， 123!。”".toReaderDrawTokens(),
+        )
+        assertEquals(emptyList(), " \t\r\n".toReaderDrawTokens())
+        assertEquals(
+            listOf("A", "—", "B", "：", "甲"),
+            "A — B：甲".toReaderDrawTokens(),
+        )
+    }
+
+    @Test
+    fun manyPagePaginationKeepsFinalLocatorWithoutRetainingTextItems() = runBlocking {
+        val source = List(256) { index ->
+            "段落${index.toString().padStart(3, '0')}天地玄黄宇宙洪荒日月盈昃辰宿列张"
+        }.joinToString("\n")
+        val document = ReaderDocument(title = "长文本测试", format = "txt", text = source)
+        val spec = ReaderPaginationSpec(
+            fallbackTitle = "长文本测试",
+            bodyWidthPx = 96,
+            bodyHeightPx = 32,
+            fontPx = 20f,
+            lineHeightPx = 32f,
+            linesPerPage = 1,
+            paragraphFirstLineIndentPx = 0f,
+        )
+
+        val pages = document.paginateForReader(spec)
+        val lines = pages.flatMap { it.lines }
+        val finalPage = pages.last()
+
+        assertTrue(pages.size >= 1_000)
+        assertTrue(pages.all { it.items.isEmpty() })
+        assertTrue(lines.filterNot { it.isBlank }.all { line ->
+            line.tokenCount == line.text.toReaderDrawTokens().size
+        })
+        assertEquals(source.length, finalPage.endOffset)
+        assertEquals(source.length, finalPage.endLocator.absoluteOffset)
+        assertEquals(finalPage.startOffset, finalPage.startLocator.absoluteOffset)
+    }
+
+    @Test
+    fun pageContainingImageRetainsOrderedItems() = runBlocking {
+        val firstText = "图片之前"
+        val secondText = "图片之后"
+        val source = "$firstText\n$secondText"
+        val secondStart = firstText.length + 1
+        val href = "chapter.xhtml"
+        val flow = ReaderFlowDocument(
+            chapters = listOf(
+                ReaderFlowChapter(
+                    ord = 0,
+                    href = href,
+                    title = "正文",
+                    titleStartOffset = 0,
+                    titleEndOffset = 0,
+                    blocks = listOf(
+                        ReaderContentBlock.Text(
+                            chapterOrd = 0,
+                            chapterHref = href,
+                            chapterTitle = "正文",
+                            unitIndex = 0,
+                            absoluteStart = 0,
+                            absoluteEnd = firstText.length,
+                            text = firstText,
+                        ),
+                        ReaderContentBlock.Image(
+                            chapterOrd = 0,
+                            chapterHref = href,
+                            chapterTitle = "正文",
+                            unitIndex = 1,
+                            absoluteStart = firstText.length,
+                            absoluteEnd = firstText.length,
+                            resource = EpubImageResource(
+                                bookFilePath = "book.epub",
+                                href = "image.png",
+                                widthPx = 100,
+                                heightPx = 100,
+                            ),
+                        ),
+                        ReaderContentBlock.Text(
+                            chapterOrd = 0,
+                            chapterHref = href,
+                            chapterTitle = "正文",
+                            unitIndex = 2,
+                            absoluteStart = secondStart,
+                            absoluteEnd = source.length,
+                            text = secondText,
+                        ),
+                    ),
+                ),
+            ),
+        )
+        val pages = ReaderDocument(
+            title = "测试",
+            format = "epub",
+            text = source,
+            flow = flow,
+        ).paginateForReader(
+            ReaderPaginationSpec(
+                fallbackTitle = "测试",
+                bodyWidthPx = 200,
+                bodyHeightPx = 400,
+                fontPx = 20f,
+                lineHeightPx = 32f,
+                linesPerPage = 12,
+                paragraphFirstLineIndentPx = 0f,
+            ),
+        )
+
+        val imagePage = pages.single { page -> page.items.any { it is ReaderPageItem.ImageBlock } }
+        assertEquals(
+            listOf("text", "image", "text"),
+            imagePage.items.map { item ->
+                when (item) {
+                    is ReaderPageItem.TextLine -> "text"
+                    is ReaderPageItem.ImageBlock -> "image"
+                }
+            },
+        )
     }
 
     @Test
@@ -406,8 +531,8 @@ class ReaderPaginationAlignmentTest {
 }
 
 private fun ReaderTextLineInfo.adjustedWidthPxForTest(): Float =
-    widthPx + if (shouldJustify && tokens.size > 1) {
-        extraTokenSpacingPx * (tokens.size - 1)
+    widthPx + if (shouldJustify && tokenCount > 1) {
+        extraTokenSpacingPx * (tokenCount - 1)
     } else {
         0f
     }

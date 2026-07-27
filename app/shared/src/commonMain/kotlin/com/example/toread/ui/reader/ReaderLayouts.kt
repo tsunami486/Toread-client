@@ -148,11 +148,19 @@ internal fun DesktopReaderLayout(
     onTogglePageMode: () -> Unit,
     onToggleNightMode: () -> Unit,
     onChapterDrawerClosed: () -> Unit,
+    chapterEntries: List<ReaderChapterEntry>? = null,
+    currentChapterOrd: Int? = null,
+    canPrevious: Boolean = pageIndex > 0,
+    canNext: Boolean = if (isDoublePage) pageIndex + 2 <= pages.lastIndex else pageIndex < pages.lastIndex,
+    onSelectChapterOrd: ((Int) -> Unit)? = null,
+    showChapterPageNumbers: Boolean = true,
 ) {
     val palette = if (isNightMode) DesktopNightReaderPalette else DesktopLightReaderPalette
-    val chapterEntries = remember(pages) { pages.readerChapterEntries() }
-    val currentChapterOrd = pages.getOrNull(pageIndex)?.chapterOrd
-        ?: chapterEntries.lastOrNull { it.pageIndex <= pageIndex }?.chapterOrd
+    val derivedChapterEntries = remember(pages) { pages.readerChapterEntries() }
+    val displayedChapterEntries = chapterEntries ?: derivedChapterEntries
+    val displayedCurrentChapterOrd = currentChapterOrd
+        ?: pages.getOrNull(pageIndex)?.chapterOrd
+        ?: displayedChapterEntries.lastOrNull { it.pageIndex <= pageIndex }?.chapterOrd
         ?: 0
     var chapterDrawerVisible by remember { mutableStateOf(false) }
     var chapterDrawerWasVisible by remember { mutableStateOf(false) }
@@ -194,6 +202,8 @@ internal fun DesktopReaderLayout(
                 progress = progress,
                 isDoublePage = isDoublePage,
                 palette = palette,
+                canPrevious = canPrevious,
+                canNext = canNext,
                 onPrevious = onPrevious,
                 onNext = onNext,
                 modifier = Modifier
@@ -207,13 +217,14 @@ internal fun DesktopReaderLayout(
         if (chapterDrawerVisible) {
             DesktopChapterDrawer(
                 bookTitle = book.title,
-                chapters = chapterEntries,
-                currentChapterOrd = currentChapterOrd,
+                chapters = displayedChapterEntries,
+                currentChapterOrd = displayedCurrentChapterOrd,
                 palette = palette,
+                showChapterPageNumbers = showChapterPageNumbers,
                 onDismiss = { chapterDrawerVisible = false },
                 onSelectChapter = { chapter ->
                     chapterDrawerVisible = false
-                    onGoToPage(chapter.pageIndex)
+                    onSelectChapterOrd?.invoke(chapter.chapterOrd) ?: onGoToPage(chapter.pageIndex)
                 },
             )
         }
@@ -389,6 +400,8 @@ private fun DesktopReaderSpread(
     progress: Double,
     isDoublePage: Boolean,
     palette: DesktopReaderPalette,
+    canPrevious: Boolean,
+    canNext: Boolean,
     onPrevious: () -> Unit,
     onNext: () -> Unit,
     modifier: Modifier = Modifier,
@@ -447,8 +460,8 @@ private fun DesktopReaderSpread(
             }
             DesktopReaderBottomBar(
                 progress = progress,
-                canPrevious = pageIndex > 0,
-                canNext = if (isDoublePage) pageIndex + 2 <= pages.lastIndex else pageIndex < pages.lastIndex,
+                canPrevious = canPrevious,
+                canNext = canNext,
                 palette = palette,
                 onPrevious = onPrevious,
                 onNext = onNext,
@@ -527,6 +540,7 @@ private fun BoxScope.DesktopChapterDrawer(
     chapters: List<ReaderChapterEntry>,
     currentChapterOrd: Int,
     palette: DesktopReaderPalette,
+    showChapterPageNumbers: Boolean,
     onDismiss: () -> Unit,
     onSelectChapter: (ReaderChapterEntry) -> Unit,
 ) {
@@ -608,6 +622,7 @@ private fun BoxScope.DesktopChapterDrawer(
                             chapter = chapter,
                             currentChapterOrd = currentChapterOrd,
                             palette = palette,
+                            showPageNumber = showChapterPageNumbers,
                             onSelectChapter = onSelectChapter,
                         )
                     }
@@ -622,6 +637,7 @@ private fun DesktopChapterRow(
     chapter: ReaderChapterEntry,
     currentChapterOrd: Int,
     palette: DesktopReaderPalette,
+    showPageNumber: Boolean,
     onSelectChapter: (ReaderChapterEntry) -> Unit,
 ) {
     val isCurrent = chapter.chapterOrd == currentChapterOrd
@@ -649,12 +665,14 @@ private fun DesktopChapterRow(
             maxLines = 2,
             overflow = TextOverflow.Ellipsis,
         )
-        Text(
-            text = ToreadStrings.chapterPage(chapter.pageIndex),
-            color = palette.mutedText,
-            fontSize = 12.sp,
-            modifier = Modifier.padding(top = 4.dp),
-        )
+        if (showPageNumber) {
+            Text(
+                text = ToreadStrings.chapterPage(chapter.pageIndex),
+                color = palette.mutedText,
+                fontSize = 12.sp,
+                modifier = Modifier.padding(top = 4.dp),
+            )
+        }
     }
 }
 
@@ -671,6 +689,11 @@ internal fun AndroidReaderLayout(
     onNext: () -> Unit,
     onGoToPage: (Int) -> Unit,
     onToggleControls: () -> Unit,
+    chapterEntries: List<ReaderChapterEntry>? = null,
+    currentChapterOrd: Int? = null,
+    canPrevious: Boolean = pageIndex > 0,
+    canNext: Boolean = pageIndex < pages.lastIndex,
+    onSelectChapterOrd: ((Int) -> Unit)? = null,
 ) {
     val typography = AndroidReaderTypography
     val systemBarInsets = rememberSystemBarInsets()
@@ -681,9 +704,11 @@ internal fun AndroidReaderLayout(
     val leftTapSource = remember { MutableInteractionSource() }
     val centerTapSource = remember { MutableInteractionSource() }
     val rightTapSource = remember { MutableInteractionSource() }
-    val chapterEntries = remember(pages) { pages.readerChapterEntries() }
-    val currentChapterOrd = pages.getOrNull(pageIndex)?.chapterOrd
-        ?: chapterEntries.lastOrNull { it.pageIndex <= pageIndex }?.chapterOrd
+    val derivedChapterEntries = remember(pages) { pages.readerChapterEntries() }
+    val displayedChapterEntries = chapterEntries ?: derivedChapterEntries
+    val displayedCurrentChapterOrd = currentChapterOrd
+        ?: pages.getOrNull(pageIndex)?.chapterOrd
+        ?: displayedChapterEntries.lastOrNull { it.pageIndex <= pageIndex }?.chapterOrd
         ?: 0
     var chapterDrawerVisible by remember { mutableStateOf(false) }
 
@@ -742,8 +767,8 @@ internal fun AndroidReaderLayout(
             AndroidReaderTopBar(book = book, onBack = onBack)
             AndroidReaderBottomPanel(
                 progress = progress,
-                canPrevious = pageIndex > 0,
-                canNext = pageIndex < pages.lastIndex,
+                canPrevious = canPrevious,
+                canNext = canNext,
                 onPrevious = onPrevious,
                 onNext = onNext,
                 onOpenChapterList = { chapterDrawerVisible = true },
@@ -752,12 +777,12 @@ internal fun AndroidReaderLayout(
         if (chapterDrawerVisible) {
             AndroidChapterDrawer(
                 bookTitle = book.title,
-                chapters = chapterEntries,
-                currentChapterOrd = currentChapterOrd,
+                chapters = displayedChapterEntries,
+                currentChapterOrd = displayedCurrentChapterOrd,
                 onDismiss = { chapterDrawerVisible = false },
                 onSelectChapter = { chapter ->
                     chapterDrawerVisible = false
-                    onGoToPage(chapter.pageIndex)
+                    onSelectChapterOrd?.invoke(chapter.chapterOrd) ?: onGoToPage(chapter.pageIndex)
                 },
             )
         }
@@ -1216,7 +1241,6 @@ private fun ReaderTextPage(
                         } else {
                             ReaderTextLine(
                                 text = renderItem.text,
-                                tokens = renderItem.line.tokens,
                                 shouldJustify = renderItem.line.shouldJustify,
                                 isChapterTitle = renderItem.line.isChapterTitle,
                                 firstLineIndentPx = renderItem.line.firstLineIndentPx,
@@ -1348,7 +1372,6 @@ private fun ReaderImageBlock(
 @Composable
 private fun ReaderTextLine(
     text: String,
-    tokens: List<String>,
     shouldJustify: Boolean,
     isChapterTitle: Boolean,
     firstLineIndentPx: Float,
@@ -1363,7 +1386,9 @@ private fun ReaderTextLine(
 ) {
     val density = LocalDensity.current
     val indent = with(density) { firstLineIndentPx.toDp() }
-    val justifyTokens = tokens.ifEmpty { text.map { it.toString() } }
+    val justifyTokens = remember(text, shouldJustify, isChapterTitle) {
+        if (shouldJustify && !isChapterTitle) text.toReaderDrawTokens() else emptyList()
+    }
     val canJustify = !isChapterTitle && shouldJustify && justifyTokens.size > 1
     val displayFontSize = if (isChapterTitle) bodyFontSize * 1.35f else bodyFontSize
     val displayLineHeight = if (isChapterTitle) bodyLineHeight * 1.35f else bodyLineHeight

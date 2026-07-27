@@ -83,6 +83,44 @@ class ReaderProgressTest {
     }
 
     @Test
+    fun epubLocatorAtSameUnitEndBoundaryChoosesFollowingPage() {
+        val href = "chapter.xhtml"
+        val pages = listOf(
+            locatorRangePage(href, startUnit = 0, startText = 0, endUnit = 0, endText = 100),
+            locatorRangePage(href, startUnit = 0, startText = 100, endUnit = 0, endText = 200),
+        )
+        val locator = EpubLocator(
+            chapterHref = href,
+            chapterIndex = 0,
+            chapterProgress = 0.5,
+            globalProgress = 0.5,
+            unitIndex = 0,
+            textOffset = 100,
+        )
+
+        assertEquals(1, locator.toPageIndex(pages))
+    }
+
+    @Test
+    fun epubLocatorAtCrossUnitEndBoundaryChoosesFollowingPage() {
+        val href = "chapter.xhtml"
+        val pages = listOf(
+            locatorRangePage(href, startUnit = 0, startText = 50, endUnit = 1, endText = 20),
+            locatorRangePage(href, startUnit = 1, startText = 20, endUnit = 1, endText = 100),
+        )
+        val locator = EpubLocator(
+            chapterHref = href,
+            chapterIndex = 0,
+            chapterProgress = 0.5,
+            globalProgress = 0.5,
+            unitIndex = 1,
+            textOffset = 20,
+        )
+
+        assertEquals(1, locator.toPageIndex(pages))
+    }
+
+    @Test
     fun oldEpubLocatorWithoutCharOffsetFallsBackToGlobalProgress() {
         val pages = listOf(
             ReaderPageSlice(chapterTitle = "正文", startOffset = 0, endOffset = 100),
@@ -182,4 +220,30 @@ class ReaderProgressTest {
         assertEquals(0, normalizePageIndex(index = -2, pageCount = 5, isDesktop = true))
         assertEquals(0, normalizePageIndex(index = 4, pageCount = 1, isDesktop = true))
     }
+
+    private fun locatorRangePage(
+        href: String,
+        startUnit: Int,
+        startText: Int,
+        endUnit: Int,
+        endText: Int,
+    ): ReaderPageSlice = ReaderPageSlice(
+        chapterTitle = "Chapter",
+        startOffset = startText,
+        endOffset = endText,
+        chapterOrd = 0,
+        chapterHref = href,
+        startLocator = ReaderTextLocator(
+            chapterOrd = 0,
+            chapterHref = href,
+            unitIndex = startUnit,
+            textOffset = startText,
+        ),
+        endLocator = ReaderTextLocator(
+            chapterOrd = 0,
+            chapterHref = href,
+            unitIndex = endUnit,
+            textOffset = endText,
+        ),
+    )
 }

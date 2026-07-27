@@ -12,15 +12,19 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
 import kotlin.math.roundToInt
-internal fun BookLocator.toPageIndex(pages: List<ReaderPageSlice>): Int {
+
+internal fun BookLocator.toPageIndex(
+    pages: List<ReaderPageSlice>,
+): Int {
     val pageCount = pages.size
     if (pageCount <= 1) return 0
     return when (this) {
         is TxtLocator -> pages.pageIndexForCharOffset(charOffset)
         is PdfLocator -> pageIndex.coerceIn(0, pageCount - 1)
-        is EpubLocator -> pages.pageIndexForEpubLocator(this)
+        is EpubLocator -> pages.pageIndexForEpubContentLocator(this)
             ?: charOffset
-            ?.let { pages.pageIndexForCharOffset(it) }
+                ?.let { pages.pageIndexForCharOffset(it) }
+            ?: pages.pageIndexForEpubChapter(this, allowNearestChapter = false)
             ?: toProgressPageIndex(pageCount)
     }
 }
@@ -62,26 +66,131 @@ private fun List<ReaderPageSlice>.pageIndexForCharOffset(charOffset: Long): Int 
     return nearestPrevious.coerceIn(0, lastIndex)
 }
 
-private fun List<ReaderPageSlice>.pageIndexForEpubLocator(locator: EpubLocator): Int? {
+private fun List<ReaderPageSlice>.pageIndexForEpubContentLocator(locator: EpubLocator): Int? {
     val href = locator.chapterHref.takeIf { it.isNotBlank() && it != "local-text" } ?: return null
     val unitIndex = locator.unitIndex ?: return null
     val textOffset = locator.textOffset ?: 0
     val exactIndex = indexOfFirst { page ->
         val start = page.startLocator
         val end = page.endLocator
-        page.chapterHref == href &&
-            start.unitIndex <= unitIndex &&
-            end.unitIndex >= unitIndex &&
-            if (start.unitIndex == end.unitIndex) {
-                textOffset in start.textOffset..end.textOffset
+        if (page.chapterHref != href) {
+            false
+        } else {
+            val targetVsStart = compareEpubPosition(
+                firstUnitIndex = unitIndex,
+                firstTextOffset = textOffset,
+                secondUnitIndex = start.unitIndex,
+                secondTextOffset = start.textOffset,
+            )
+            val targetVsEnd = compareEpubPosition(
+                firstUnitIndex = unitIndex,
+                firstTextOffset = textOffset,
+                secondUnitIndex = end.unitIndex,
+                secondTextOffset = end.textOffset,
+            )
+            val emptyLogicalRange =
+                start.unitIndex == end.unitIndex &&
+                    start.textOffset == end.textOffset
+            targetVsStart >= 0 && if (emptyLogicalRange) {
+                targetVsEnd == 0
             } else {
-                unitIndex > start.unitIndex || textOffset >= start.textOffset
+                targetVsEnd < 0
             }
+        }
     }
     if (exactIndex >= 0) return exactIndex
     return indexOfLast { page ->
-        page.chapterHref == href && page.startLocator.unitIndex <= unitIndex
+        val start = page.startLocator
+        page.chapterHref == href &&
+            compareEpubPosition(
+                firstUnitIndex = start.unitIndex,
+                firstTextOffset = start.textOffset,
+                secondUnitIndex = unitIndex,
+                secondTextOffset = textOffset,
+            ) <= 0
     }.takeIf { it >= 0 }
+}
+
+private fun compareEpubPosition(
+    firstUnitIndex: Int,
+    firstTextOffset: Int,
+    secondUnitIndex: Int,
+    secondTextOffset: Int,
+): Int =
+    when {
+        firstUnitIndex != secondUnitIndex -> firstUnitIndex.compareTo(secondUnitIndex)
+        else -> firstTextOffset.compareTo(secondTextOffset)
+    }
+
+private fun List<ReaderPageSlice>.pageIndexForEpubChapter(
+    locator: EpubLocator,
+    allowNearestChapter: Boolean,
+): Int? {
+    if (isEmpty()) return null
+    val href = locator.chapterHref.takeIf { it.isNotBlank() && it != "local-text" }
+    val matchingIndices = indices.filter { index ->
+        val page = this[index]
+        when {
+            href != null -> page.chapterHref == href
+            else -> page.chapterOrd == locator.chapterIndex
+        }
+    }.ifEmpty {
+        indices.filter { index -> this[index].chapterOrd == locator.chapterIndex }
+    }
+    val candidateIndices = if (matchingIndices.isNotEmpty() || !allowNearestChapter) {
+        matchingIndices
+    } else {
+        val nearestChapterOrd = minByOrNull { page ->
+            kotlin.math.abs(page.chapterOrd - locator.chapterIndex)
+        }?.chapterOrd ?: return null
+        indices.filter { index -> this[index].chapterOrd == nearestChapterOrd }
+    }
+    if (candidateIndices.isEmpty()) return null
+    val chapterProgress = locator.chapterProgress
+        .takeIf(Double::isFinite)
+        ?.coerceIn(0.0, 1.0)
+        ?: 0.0
+    val offset = (chapterProgress * (candidateIndices.size - 1)).roundToInt()
+    return candidateIndices[offset]
+}
+
+private fun List<ReaderPageSlice>.epubLocatorForPage(
+    pageIndex: Int,
+): EpubLocator {
+    val boundedPageIndex = pageIndex.coerceIn(0, lastIndex.coerceAtLeast(0))
+    val page = getOrNull(boundedPageIndex)
+    val chapterProgress = chapterProgressAt(boundedPageIndex)
+    return EpubLocator(
+        chapterHref = page?.startLocator?.chapterHref
+            ?: page?.chapterHref
+            ?: "local-text",
+        chapterIndex = page?.chapterOrd ?: boundedPageIndex,
+        chapterProgress = chapterProgress,
+        globalProgress = boundedPageIndex.pageProgress(size),
+        charOffset = null,
+        unitIndex = page?.startLocator?.unitIndex,
+        textOffset = page?.startLocator?.textOffset,
+    )
+}
+
+private fun List<ReaderPageSlice>.chapterProgressAt(pageIndex: Int): Double {
+    val page = getOrNull(pageIndex) ?: return 0.0
+    fun isSameChapter(candidate: ReaderPageSlice): Boolean =
+        if (page.chapterHref != null) {
+            candidate.chapterHref == page.chapterHref
+        } else {
+            candidate.chapterOrd == page.chapterOrd
+        }
+
+    var firstPageIndex = pageIndex
+    while (firstPageIndex > 0 && isSameChapter(this[firstPageIndex - 1])) {
+        firstPageIndex--
+    }
+    var lastPageIndex = pageIndex
+    while (lastPageIndex < lastIndex && isSameChapter(this[lastPageIndex + 1])) {
+        lastPageIndex++
+    }
+    return (pageIndex - firstPageIndex).pageProgress(lastPageIndex - firstPageIndex + 1)
 }
 
 internal fun saveReaderProgress(
@@ -91,33 +200,25 @@ internal fun saveReaderProgress(
     remoteSyncPolicy: ReaderProgressRemoteSyncPolicy,
     book: BookshelfBook,
     pageIndex: Int,
-    pageCount: Int,
-    charOffset: Int,
-    chapterOrd: Int?,
-    startLocator: ReaderTextLocator? = null,
-    chapterHref: String? = null,
+    pages: List<ReaderPageSlice>,
     sourceLength: Int,
     deviceId: String,
     onSyncFinished: (() -> Unit)? = null,
 ): Job? {
     val repository = progressRepository ?: return null
-    val globalProgress = pageIndex.pageProgress(pageCount)
+    val pageCount = pages.size
+    val boundedPageIndex = pageIndex.coerceIn(0, pages.lastIndex.coerceAtLeast(0))
+    val page = pages.getOrNull(boundedPageIndex)
+    val charOffset = page?.startOffset ?: 0
+    val globalProgress = boundedPageIndex.pageProgress(pageCount)
     val textProgress = if (sourceLength > 0) {
         charOffset.toDouble().coerceIn(0.0, sourceLength.toDouble()) / sourceLength.toDouble()
     } else {
         globalProgress
     }
     val locator = when (book.format.lowercase()) {
-        "epub" -> EpubLocator(
-            chapterHref = startLocator?.chapterHref ?: chapterHref ?: "local-text",
-            chapterIndex = chapterOrd ?: pageIndex,
-            chapterProgress = 0.0,
-            globalProgress = textProgress,
-            charOffset = charOffset.toLong(),
-            unitIndex = startLocator?.unitIndex,
-            textOffset = startLocator?.textOffset,
-        )
-        "pdf" -> PdfLocator(pageIndex = pageIndex, pageOffsetY = 0.0, globalProgress = globalProgress)
+        "epub" -> pages.epubLocatorForPage(pageIndex = boundedPageIndex)
+        "pdf" -> PdfLocator(pageIndex = boundedPageIndex, pageOffsetY = 0.0, globalProgress = globalProgress)
         else -> TxtLocator(
             charOffset = charOffset.toLong(),
             paragraphIndex = null,
@@ -164,6 +265,29 @@ internal fun savePdfReaderProgress(
             pageOffsetY = pageOffsetY,
             globalProgressOverride = globalProgressOverride,
         ),
+        deviceId = deviceId,
+        onSyncFinished = onSyncFinished,
+    )
+}
+
+internal fun saveEpubReaderProgress(
+    scope: CoroutineScope,
+    progressRepository: ReadingProgressRepository?,
+    progressSyncScheduler: ProgressSyncScheduler?,
+    remoteSyncPolicy: ReaderProgressRemoteSyncPolicy,
+    book: BookshelfBook,
+    locator: EpubLocator,
+    deviceId: String,
+    onSyncFinished: (() -> Unit)? = null,
+): Job? {
+    val repository = progressRepository ?: return null
+    return saveReaderLocatorProgress(
+        scope = scope,
+        progressRepository = repository,
+        progressSyncScheduler = progressSyncScheduler,
+        remoteSyncPolicy = remoteSyncPolicy,
+        book = book,
+        locator = locator,
         deviceId = deviceId,
         onSyncFinished = onSyncFinished,
     )
