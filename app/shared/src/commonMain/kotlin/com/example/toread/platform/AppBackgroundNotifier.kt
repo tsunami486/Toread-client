@@ -6,6 +6,7 @@ import kotlinx.coroutines.withTimeoutOrNull
 
 object AppBackgroundNotifier {
     private var onEnterBackground: (() -> Job?)? = null
+    private var onEnterForeground: (() -> Unit)? = null
 
     fun setOnEnterBackground(callback: (() -> Job?)?) {
         onEnterBackground = callback
@@ -13,6 +14,14 @@ object AppBackgroundNotifier {
 
     fun notifyEnterBackground() {
         onEnterBackground?.invoke()
+    }
+
+    fun setOnEnterForeground(callback: (() -> Unit)?) {
+        onEnterForeground = callback
+    }
+
+    fun notifyEnterForeground() {
+        onEnterForeground?.invoke()
     }
 
     fun notifyEnterBackgroundAndWait(timeoutMillis: Long = 1_500L) {

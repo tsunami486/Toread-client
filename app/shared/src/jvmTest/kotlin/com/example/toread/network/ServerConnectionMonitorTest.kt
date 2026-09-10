@@ -3,7 +3,9 @@ package com.example.toread.network
 import com.example.toread.auth.ServerConnectionResult
 import com.example.toread.progress.ProgressClock
 import java.util.concurrent.atomic.AtomicInteger
+import java.util.concurrent.atomic.AtomicLong
 import kotlin.test.Test
+import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertIs
 import kotlin.test.assertTrue
@@ -98,16 +100,170 @@ class ServerConnectionMonitorTest {
         }
     }
 
+    @Test
+    fun firstFailureUsesDedicatedConfirmationDelayBeforePublishingOffline() = withMonitorScope { scope ->
+        val calls = AtomicInteger()
+        val callTimes = Channel<Long>(capacity = Channel.UNLIMITED)
+        val monitor = createMonitor(
+            scope = scope,
+            healthCheck = {
+                calls.incrementAndGet()
+                callTimes.send(System.nanoTime())
+                ServerConnectionResult.Failure("offline")
+            },
+            confirmationDelayMillis = 37L,
+        )
+
+        try {
+            monitor.start()
+            val firstCall = withTimeout(TestTimeoutMillis) { callTimes.receive() }
+            val secondCall = withTimeout(TestTimeoutMillis) { callTimes.receive() }
+            val elapsedMillis = (secondCall - firstCall) / 1_000_000L
+            assertTrue(elapsedMillis >= 25L, "confirmation ran after only ${elapsedMillis}ms")
+            assertIs<ServerConnectionState.Offline>(monitor.state.value)
+        } finally {
+            monitor.stop()
+        }
+    }
+
+    @Test
+    fun explicitCheckInterruptsConfirmationDelayWithoutAddingAnExtraCheck() = withMonitorScope { scope ->
+        val calls = AtomicInteger()
+        val monitor = createMonitor(
+            scope = scope,
+            healthCheck = {
+                calls.incrementAndGet()
+                ServerConnectionResult.Failure("offline")
+            },
+            confirmationDelayMillis = 60_000L,
+            retryDelaysMillis = listOf(60_000L),
+        )
+
+        try {
+            monitor.start()
+            withTimeout(TestTimeoutMillis) {
+                while (calls.get() < 1) {
+                    kotlinx.coroutines.yield()
+                }
+            }
+
+            monitor.triggerCheck("sync_failed")
+
+            withTimeout(TestTimeoutMillis) {
+                while (calls.get() < 2) {
+                    kotlinx.coroutines.yield()
+                }
+            }
+            kotlinx.coroutines.delay(50L)
+            assertEquals(2, calls.get())
+        } finally {
+            monitor.stop()
+        }
+    }
+
+    @Test
+    fun offlineBackoffNeverExceedsConfiguredPollCeiling() = withMonitorScope { scope ->
+        val calls = AtomicInteger()
+        val lastCallNanos = AtomicLong()
+        val monitor = createMonitor(
+            scope = scope,
+            healthCheck = {
+                lastCallNanos.set(System.nanoTime())
+                calls.incrementAndGet()
+                ServerConnectionResult.Failure("offline")
+            },
+            retryDelaysMillis = listOf(5L, 20L, 60_000L),
+            offlinePollCeilingMillis = 20L,
+        )
+
+        try {
+            monitor.start()
+            withTimeout(TestTimeoutMillis) {
+                while (calls.get() < 5) {
+                    kotlinx.coroutines.yield()
+                }
+            }
+            assertTrue(lastCallNanos.get() > 0L)
+        } finally {
+            monitor.stop()
+        }
+    }
+
+    @Test
+    fun explicitCheckInterruptsLongOfflineBackoff() = withMonitorScope { scope ->
+        val calls = AtomicInteger()
+        val monitor = createMonitor(
+            scope = scope,
+            healthCheck = {
+                calls.incrementAndGet()
+                ServerConnectionResult.Failure("offline")
+            },
+            retryDelaysMillis = listOf(60_000L),
+            offlinePollCeilingMillis = 60_000L,
+        )
+
+        try {
+            monitor.start()
+            withTimeout(TestTimeoutMillis) {
+                while (calls.get() < 2) {
+                    kotlinx.coroutines.yield()
+                }
+            }
+
+            monitor.triggerCheck("sync_failed")
+
+            withTimeout(TestTimeoutMillis) {
+                while (calls.get() < 3) {
+                    kotlinx.coroutines.yield()
+                }
+            }
+        } finally {
+            monitor.stop()
+        }
+    }
+
+    @Test
+    fun unexpectedHealthCheckExceptionDoesNotStopMonitoring() = withMonitorScope { scope ->
+        val calls = AtomicInteger()
+        val monitor = createMonitor(
+            scope = scope,
+            healthCheck = {
+                if (calls.incrementAndGet() == 1) {
+                    error("unexpected")
+                }
+                ServerConnectionResult.Success
+            },
+            retryDelaysMillis = listOf(10L),
+        )
+
+        try {
+            monitor.start()
+            withTimeout(TestTimeoutMillis) {
+                while (monitor.state.value !is ServerConnectionState.Online) {
+                    kotlinx.coroutines.yield()
+                }
+            }
+            assertTrue(calls.get() >= 2)
+        } finally {
+            monitor.stop()
+        }
+    }
+
     private fun createMonitor(
         scope: CoroutineScope,
         healthCheck: suspend () -> ServerConnectionResult,
+        retryDelaysMillis: List<Long> = listOf(10L, 60_000L),
+        offlinePollCeilingMillis: Long = 60_000L,
+        confirmationDelayMillis: Long = 0L,
     ): ServerConnectionMonitor =
         ServerConnectionMonitor(
             scope = scope,
             healthCheck = healthCheck,
             clock = IncrementingClock(),
             onlinePollMillis = 60_000L,
-            retryDelaysMillis = listOf(10L, 60_000L),
+            retryDelaysMillis = retryDelaysMillis,
+            offlinePollCeilingMillis = offlinePollCeilingMillis,
+            confirmationDelayMillis = confirmationDelayMillis,
         )
 
     private suspend fun Channel<ServerConnectionState>.awaitOnline(): ServerConnectionState.Online =

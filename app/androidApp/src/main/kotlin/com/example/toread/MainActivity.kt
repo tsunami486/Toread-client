@@ -78,6 +78,11 @@ class MainActivity : ComponentActivity() {
         super.onStop()
     }
 
+    override fun onStart() {
+        super.onStart()
+        AppBackgroundNotifier.notifyEnterForeground()
+    }
+
     override fun onKeyDown(keyCode: Int, event: KeyEvent): Boolean {
         if (AndroidReaderDeviceControlsBridge.dispatchVolumeKey(keyCode)) {
             return true
