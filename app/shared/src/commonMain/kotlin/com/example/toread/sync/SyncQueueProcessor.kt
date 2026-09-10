@@ -8,6 +8,8 @@ import com.example.toread.progress.ProgressClock
 import com.example.toread.progress.ReadingProgressJson
 import com.example.toread.progress.ReadingProgressSyncPayload
 import com.example.toread.progress.isIsoTimestampAfter
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 
 class SyncQueueProcessor(
     private val database: ToreadDatabase,
@@ -15,7 +17,12 @@ class SyncQueueProcessor(
     private val clock: ProgressClock = PlatformProgressClock(),
     private val bookMetadataUploader: BookMetadataSyncUploader? = null,
 ) {
-    suspend fun flushPending(limit: Int = DefaultFlushLimit): SyncRunSummary {
+    private val flushMutex = Mutex()
+
+    suspend fun flushPending(
+        limit: Int = DefaultFlushLimit,
+        stopOnFailure: Boolean = false,
+    ): SyncRunSummary = flushMutex.withLock {
         val now = clock.nowIsoString()
         val dueItems = database.toreadDatabaseQueries
             .selectPendingSyncQueue(now)
@@ -36,6 +43,7 @@ class SyncQueueProcessor(
                         is QueueItemResult.Failed -> {
                             failed++
                             lastError = result.message
+                            if (stopOnFailure) break
                         }
                         is QueueItemResult.Unavailable -> {
                             skipped++
@@ -50,6 +58,7 @@ class SyncQueueProcessor(
                         is QueueItemResult.Failed -> {
                             failed++
                             lastError = result.message
+                            if (stopOnFailure) break
                         }
                         is QueueItemResult.Unavailable -> {
                             skipped++
@@ -69,11 +78,12 @@ class SyncQueueProcessor(
                     )
                     failed++
                     lastError = message
+                    if (stopOnFailure) break
                 }
             }
         }
 
-        return SyncRunSummary(
+        SyncRunSummary(
             scanned = dueItems.size,
             uploaded = uploaded,
             failed = failed,
@@ -297,8 +307,10 @@ class SyncQueueProcessor(
             )
         }
 
-        return (passthroughItems + latestProgressItems.values.map { it.first })
-            .sortedBy { it.created_at }
+        val progressItems = latestProgressItems.values
+            .map { it.first }
+            .sortedByDescending { it.created_at }
+        return progressItems + passthroughItems.sortedBy { it.created_at }
     }
 
     private companion object {

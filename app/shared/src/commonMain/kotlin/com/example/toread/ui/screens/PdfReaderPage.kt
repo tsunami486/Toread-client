@@ -320,7 +320,7 @@ internal fun PdfReaderPage(
                 null
             },
             deviceId = platform.name,
-            onSyncFinished = if (remoteSyncPolicy == ReaderProgressRemoteSyncPolicy.Immediate) {
+            onSyncFinished = if (remoteSyncPolicy == ReaderProgressRemoteSyncPolicy.FinalFlush) {
                 onProgressSyncFinished
             } else {
                 null
@@ -357,7 +357,7 @@ internal fun PdfReaderPage(
     }
 
     fun exitReader() {
-        saveCurrentProgress(ReaderProgressRemoteSyncPolicy.Immediate)
+        saveCurrentProgress(ReaderProgressRemoteSyncPolicy.FinalFlush)
         if (isAndroid) SystemBarsController.showSystemBars()
         onBack()
     }
@@ -414,7 +414,7 @@ internal fun PdfReaderPage(
             androidContinuousSeekGeneration++
         }
         if (isDesktop) {
-            saveCurrentProgress(ReaderProgressRemoteSyncPolicy.Debounced)
+            saveCurrentProgress(ReaderProgressRemoteSyncPolicy.RequestFlush)
         }
         if (isAndroid && !controlsVisible) {
             SystemBarsController.hideSystemBars()
@@ -468,7 +468,7 @@ internal fun PdfReaderPage(
             isDoublePage = nextDoublePage,
             showCoverAlone = desktopShowCoverAlone,
         )
-        saveCurrentProgress(ReaderProgressRemoteSyncPolicy.Debounced)
+        saveCurrentProgress(ReaderProgressRemoteSyncPolicy.RequestFlush)
     }
 
     fun toggleDesktopReadingDirection() {
@@ -485,7 +485,7 @@ internal fun PdfReaderPage(
             isDoublePage = desktopDoublePageEnabled,
             showCoverAlone = desktopShowCoverAlone,
         )
-        saveCurrentProgress(ReaderProgressRemoteSyncPolicy.Debounced)
+        saveCurrentProgress(ReaderProgressRemoteSyncPolicy.RequestFlush)
     }
 
     fun setAndroidLandscapePageMode(enabled: Boolean) {
@@ -609,7 +609,7 @@ internal fun PdfReaderPage(
             androidAutoPageTurning = false
             androidZoomActive = false
             androidZoomDismissGeneration++
-            saveCurrentProgress(ReaderProgressRemoteSyncPolicy.Immediate)
+            saveCurrentProgress(ReaderProgressRemoteSyncPolicy.FinalFlush)
         },
     )
 
@@ -1077,7 +1077,7 @@ internal fun PdfReaderPage(
                                         progressPageIndex = positionPageIndex,
                                         pageOffsetY = pageOffsetY,
                                         remoteSyncPolicy =
-                                            ReaderProgressRemoteSyncPolicy.Debounced,
+                                            ReaderProgressRemoteSyncPolicy.RequestFlush,
                                     )
                                 }
                             },
@@ -1115,7 +1115,7 @@ internal fun PdfReaderPage(
                                         progressPageIndex = committedSpread.progressPageIndex,
                                         pageOffsetY = 0.0,
                                         remoteSyncPolicy =
-                                            ReaderProgressRemoteSyncPolicy.Debounced,
+                                            ReaderProgressRemoteSyncPolicy.RequestFlush,
                                     )
                                 }
                             },

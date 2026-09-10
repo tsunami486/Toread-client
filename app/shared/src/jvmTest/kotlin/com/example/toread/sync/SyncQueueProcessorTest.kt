@@ -9,6 +9,9 @@ import com.example.toread.progress.ReadingProgressSyncPayload
 import com.example.toread.progress.ReadingProgressRepository
 import com.example.toread.progress.SaveProgressResult
 import com.example.toread.reader.TxtLocator
+import java.util.concurrent.atomic.AtomicInteger
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.async
 import kotlinx.serialization.json.JsonObject
 import kotlinx.coroutines.runBlocking
 import kotlin.test.Test
@@ -237,6 +240,78 @@ class SyncQueueProcessorTest {
         assertEquals("synced", repository.listBooks().single().syncStatus)
     }
 
+    @Test
+    fun concurrentFlushesNeverUploadTheSameQueueItemAtTheSameTime() = runBlocking {
+        val database = testDatabase()
+        insertBook(database, "hash_single_flight")
+        val progressRepository = ReadingProgressRepository(
+            database,
+            FixedSyncClock("2026-06-09T06:00:00Z"),
+        )
+        progressRepository.saveLocalProgress(
+            bookHash = "hash_single_flight",
+            format = "txt",
+            locator = TxtLocator(charOffset = 600, globalProgress = 0.6),
+            deviceId = "desktop",
+        )
+        val uploader = GatedUploader("hash_single_flight")
+        val processor = SyncQueueProcessor(
+            database,
+            uploader,
+            FixedSyncClock("2026-06-09T06:01:00Z"),
+        )
+
+        val first = async { processor.flushPending() }
+        uploader.firstStarted.await()
+        val second = async { processor.flushPending() }
+        assertEquals(1, uploader.calls.get())
+
+        uploader.releaseFirst.complete(Unit)
+        assertEquals(1, first.await().uploaded)
+        assertEquals(0, second.await().uploaded)
+        assertEquals(1, uploader.calls.get())
+        assertEquals(1, uploader.maxConcurrentCalls.get())
+    }
+
+    @Test
+    fun automaticFlushPrioritizesNewestProgressAndStopsAfterFailure() = runBlocking {
+        val database = testDatabase()
+        insertBook(database, "hash_old_failed")
+        insertBook(database, "hash_latest_failed")
+        insertProgressQueueItem(
+            database = database,
+            id = "progress_hash_old_failed_2026-06-09T07:00:00Z",
+            bookHash = "hash_old_failed",
+            updatedAt = "2026-06-09T07:00:00Z",
+            charOffset = 100,
+            progress = 0.1,
+        )
+        insertProgressQueueItem(
+            database = database,
+            id = "progress_hash_latest_failed_2026-06-09T07:00:01Z",
+            bookHash = "hash_latest_failed",
+            updatedAt = "2026-06-09T07:00:01Z",
+            charOffset = 900,
+            progress = 0.9,
+        )
+        val uploader = RecordingUploader(SyncUploadResult.Failed("offline"))
+        val processor = SyncQueueProcessor(
+            database,
+            uploader,
+            FixedSyncClock("2026-06-09T07:01:00Z"),
+        )
+
+        val summary = processor.flushPending(stopOnFailure = true)
+
+        assertEquals(1, summary.failed)
+        assertEquals(1, uploader.uploadedPayloads.size)
+        assertEquals("hash_latest_failed", uploader.uploadedPayloads.single().bookHash)
+        assertEquals("pending", database.toreadDatabaseQueries
+            .selectSyncQueueItemById("progress_hash_old_failed_2026-06-09T07:00:00Z")
+            .executeAsOne()
+            .sync_status)
+    }
+
     private fun testDatabase(): ToreadDatabase {
         val driver = JdbcSqliteDriver(JdbcSqliteDriver.IN_MEMORY)
         ToreadDatabase.Schema.create(driver)
@@ -361,6 +436,29 @@ private class RecordingBookUploader(
     override suspend fun upload(payload: BookMetadataSyncPayload): BookMetadataUploadResult {
         uploadedPayloads += payload
         return nextResult
+    }
+}
+
+private class GatedUploader(
+    private val bookHash: String,
+) : ReadingProgressSyncUploader {
+    val calls = AtomicInteger(0)
+    val maxConcurrentCalls = AtomicInteger(0)
+    val firstStarted = CompletableDeferred<Unit>()
+    val releaseFirst = CompletableDeferred<Unit>()
+    private val activeCalls = AtomicInteger(0)
+
+    override suspend fun upload(payload: ReadingProgressSyncPayload): SyncUploadResult {
+        val active = activeCalls.incrementAndGet()
+        maxConcurrentCalls.updateAndGet { previous -> maxOf(previous, active) }
+        return try {
+            calls.incrementAndGet()
+            firstStarted.complete(Unit)
+            releaseFirst.await()
+            uploadedProgress(bookHash, "2026-06-09T06:02:00Z", payload.progress)
+        } finally {
+            activeCalls.decrementAndGet()
+        }
     }
 }
 

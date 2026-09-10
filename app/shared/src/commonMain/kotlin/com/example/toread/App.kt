@@ -87,7 +87,8 @@ fun ToreadApp() {
     var books by remember { mutableStateOf<List<BookshelfBook>>(emptyList()) }
     var refreshKey by remember { mutableIntStateOf(0) }
     var dynamicColorEnabled by remember { mutableStateOf(false) }
-    var autoSyncEnabled by remember { mutableStateOf(true) }
+    val autoSyncEnabledState = remember { mutableStateOf(true) }
+    var autoSyncEnabled by autoSyncEnabledState
     var bookshelfLayoutMode by remember { mutableStateOf(BookshelfLayoutMode.Grid) }
     var syncRunning by remember { mutableStateOf(false) }
     var serverConnectionState by remember {
@@ -170,15 +171,21 @@ fun ToreadApp() {
             null
         }
     }
-    val progressSyncScheduler = remember(appScope, syncQueueProcessor, autoSyncEnabled, serverConnectionMonitor) {
+    val progressSyncScheduler = remember(appScope, syncQueueProcessor, serverConnectionMonitor) {
         ProgressSyncScheduler(
             scope = appScope,
-            syncQueueProcessorProvider = { if (autoSyncEnabled) syncQueueProcessor else null },
+            flushPending = {
+                if (autoSyncEnabledState.value) {
+                    syncQueueProcessor?.flushPending(stopOnFailure = true)
+                } else {
+                    null
+                }
+            },
             onFlushFinished = { summary ->
                 when {
-                    summary.uploaded > 0 -> serverConnectionMonitor?.markOnline("auto_progress_flush")
+                    summary.uploaded > 0 -> serverConnectionMonitor?.markOnline("auto_queue_flush")
                     (summary.failed > 0 || summary.skipped > 0) && summary.lastError.shouldTriggerServerCheck() -> {
-                        serverConnectionMonitor?.triggerCheck("auto_progress_flush")
+                        serverConnectionMonitor?.triggerCheck("auto_queue_flush")
                     }
                 }
             },

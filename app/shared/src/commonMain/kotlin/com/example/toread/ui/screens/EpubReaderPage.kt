@@ -135,7 +135,7 @@ internal fun EpubReaderPage(
             book = book,
             locator = locator,
             deviceId = platform.name,
-            onSyncFinished = if (remoteSyncPolicy == ReaderProgressRemoteSyncPolicy.Immediate) {
+            onSyncFinished = if (remoteSyncPolicy == ReaderProgressRemoteSyncPolicy.FinalFlush) {
                 onProgressSyncFinished
             } else {
                 null
@@ -144,7 +144,7 @@ internal fun EpubReaderPage(
     }
 
     fun exitReader() {
-        saveLocator(state.locator, ReaderProgressRemoteSyncPolicy.Immediate)
+        saveLocator(state.locator, ReaderProgressRemoteSyncPolicy.FinalFlush)
         if (isAndroid) SystemBarsController.showSystemBars()
         onBack()
     }
@@ -284,7 +284,7 @@ internal fun EpubReaderPage(
                             )
                         }
                         state = next
-                        saveLocator(next.locator, ReaderProgressRemoteSyncPolicy.Debounced)
+                        saveLocator(next.locator, ReaderProgressRemoteSyncPolicy.RequestFlush)
                         if (isAndroid && !controlsVisible) {
                             SystemBarsController.hideSystemBars()
                         }

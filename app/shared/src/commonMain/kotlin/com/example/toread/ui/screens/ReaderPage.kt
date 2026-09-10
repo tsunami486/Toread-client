@@ -161,7 +161,7 @@ internal fun ReaderPage(
                 scope = progressSaveScope,
                 progressRepository = progressRepository,
                 progressSyncScheduler = progressSyncScheduler,
-                remoteSyncPolicy = ReaderProgressRemoteSyncPolicy.Immediate,
+                remoteSyncPolicy = ReaderProgressRemoteSyncPolicy.FinalFlush,
                 book = currentBook,
                 pageIndex = targetPage,
                 pages = measuredPages,
@@ -405,7 +405,7 @@ internal fun ReaderPage(
 
                 fun saveCurrentProgress(
                     targetPage: Int = currentPageIndex,
-                    remoteSyncPolicy: ReaderProgressRemoteSyncPolicy = ReaderProgressRemoteSyncPolicy.Debounced,
+                    remoteSyncPolicy: ReaderProgressRemoteSyncPolicy = ReaderProgressRemoteSyncPolicy.RequestFlush,
                 ) {
                     saveReaderProgress(
                         scope = progressSaveScope,
@@ -417,7 +417,7 @@ internal fun ReaderPage(
                         pages = pages,
                         sourceLength = displayedDocument.text.length,
                         deviceId = platform.name,
-                        onSyncFinished = if (remoteSyncPolicy == ReaderProgressRemoteSyncPolicy.Immediate) {
+                        onSyncFinished = if (remoteSyncPolicy == ReaderProgressRemoteSyncPolicy.FinalFlush) {
                             onProgressSyncFinished
                         } else {
                             null
@@ -453,7 +453,7 @@ internal fun ReaderPage(
                             scope = progressSaveScope,
                             progressRepository = progressRepository,
                             progressSyncScheduler = progressSyncScheduler,
-                            remoteSyncPolicy = ReaderProgressRemoteSyncPolicy.Immediate,
+                            remoteSyncPolicy = ReaderProgressRemoteSyncPolicy.FinalFlush,
                             book = book,
                             pageIndex = targetPage,
                             pages = currentPages,

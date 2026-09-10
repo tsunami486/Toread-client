@@ -352,19 +352,26 @@ private fun saveReaderLocatorProgress(
         val result = progressRepository.saveLocalProgress(
             bookHash = book.bookHash,
             format = book.format,
-            locator = locator,
+            locator = locator.withSanitizedChapterTitle(),
             deviceId = deviceId,
         )
         if (result is SaveProgressResult.Saved) {
             when (remoteSyncPolicy) {
-                ReaderProgressRemoteSyncPolicy.Debounced -> progressSyncScheduler?.scheduleDebounced()
-                ReaderProgressRemoteSyncPolicy.Immediate -> progressSyncScheduler?.flushNow()?.join()
+                ReaderProgressRemoteSyncPolicy.RequestFlush -> progressSyncScheduler?.requestFlush()
+                ReaderProgressRemoteSyncPolicy.FinalFlush -> progressSyncScheduler?.flushNow()?.join()
             }
             onSyncFinished?.invoke()
         }
     }
 
+private fun BookLocator.withSanitizedChapterTitle(): BookLocator =
+    when (this) {
+        is EpubLocator -> copy(chapterTitle = chapterTitle.toEpubLocatorChapterTitle(chapterIndex))
+        is TxtLocator -> copy(chapterTitle = chapterTitle.toLocatorChapterTitle())
+        is PdfLocator -> this
+    }
+
 internal enum class ReaderProgressRemoteSyncPolicy {
-    Debounced,
-    Immediate,
+    RequestFlush,
+    FinalFlush,
 }
