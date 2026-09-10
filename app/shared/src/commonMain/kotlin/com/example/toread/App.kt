@@ -31,11 +31,13 @@ import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
 import com.example.toread.auth.AuthClient
 import com.example.toread.auth.AuthClientResult
+import com.example.toread.auth.isConfirmedInvalidRefreshToken
 import com.example.toread.config.ServerBaseUrlConfig
 import com.example.toread.importing.BookImportService
 import com.example.toread.importing.createToreadDatabase
 import com.example.toread.library.BookshelfBook
 import com.example.toread.library.BookshelfRepository
+import com.example.toread.logging.ToreadClientLog
 import com.example.toread.network.ServerConnectionMonitor
 import com.example.toread.network.ServerConnectionState
 import com.example.toread.progress.ApplyProgressResult
@@ -114,6 +116,7 @@ fun ToreadApp() {
     var authIdentityGeneration by remember { mutableIntStateOf(0) }
     var authSessionExpiresInSeconds by remember { mutableStateOf<Long?>(null) }
     var scheduledAuthRefreshRetry by remember { mutableStateOf(false) }
+    var authRefreshRetryAttempt by remember { mutableIntStateOf(0) }
     var dynamicColorEnabled by remember { mutableStateOf(false) }
     val autoSyncEnabledState = remember { mutableStateOf(true) }
     var autoSyncEnabled by autoSyncEnabledState
@@ -274,7 +277,10 @@ fun ToreadApp() {
         )
     }
 
-    suspend fun refreshAuthSessionIfNeeded(force: Boolean = false): Boolean {
+    suspend fun refreshAuthSessionIfNeeded(
+        force: Boolean = false,
+        reason: String = AuthRefreshReasonUnspecified,
+    ): Boolean {
         val requestedIdentityGeneration = authIdentityGeneration
         val requestedRefreshToken = settingsRepository?.refreshToken()
         return authRefreshMutex.withLock {
@@ -304,14 +310,27 @@ fun ToreadApp() {
                 authSessionReady = false
                 authSessionExpiresInSeconds = null
                 scheduledAuthRefreshRetry = false
+                authRefreshRetryAttempt = 0
                 pendingAutomaticRefresh = null
                 selectedBook = null
                 screen = ToreadScreen.Auth
+                ToreadClientLog.warn(
+                    AuthLogArea,
+                    "auth.session_cleared",
+                    "reason" to reason,
+                    "cause" to "missing_refresh_token",
+                )
                 showAppMessage(ToreadStrings.LoginExpired)
                 return@withLock false
             }
 
-            when (val result = client.refresh(refreshToken)) {
+            val result = client.refresh(refreshToken)
+            logAuthRefreshResult(
+                reason = reason,
+                result = result,
+                retryAttempt = authRefreshRetryAttempt,
+            )
+            when (result) {
                 is AuthClientResult.Success -> {
                     if (
                         authIdentityGeneration != requestedIdentityGeneration ||
@@ -326,6 +345,7 @@ fun ToreadApp() {
                     authSessionReady = true
                     authSessionExpiresInSeconds = result.session.expiresInSeconds
                     scheduledAuthRefreshRetry = false
+                    authRefreshRetryAttempt = 0
                     authSessionGeneration++
                     if (
                         autoSyncEnabled &&
@@ -347,20 +367,28 @@ fun ToreadApp() {
                     ) {
                         return@withLock false
                     }
-                    if (result.isInvalidRefreshToken()) {
+                    if (result.isConfirmedInvalidRefreshToken()) {
                         tokenStore.clear()
                         repository.clearAuthMode()
                         authSessionReady = false
                         authSessionExpiresInSeconds = null
                         scheduledAuthRefreshRetry = false
+                        authRefreshRetryAttempt = 0
                         pendingAutomaticRefresh = null
                         selectedBook = null
                         screen = ToreadScreen.Auth
+                        ToreadClientLog.warn(
+                            AuthLogArea,
+                            "auth.session_cleared",
+                            "reason" to reason,
+                            "cause" to "invalid_refresh_token",
+                        )
                         showAppMessage(ToreadStrings.LoginExpired)
                         false
                     } else {
                         authSessionReady = false
                         scheduledAuthRefreshRetry = true
+                        authRefreshRetryAttempt += 1
                         authSessionGeneration++
                         showAppMessage(ToreadStrings.refreshAuthFailed(result.message))
                         if (result.message.shouldTriggerServerCheck()) {
@@ -493,6 +521,7 @@ fun ToreadApp() {
         authSessionReady,
         authSessionExpiresInSeconds,
         scheduledAuthRefreshRetry,
+        authRefreshRetryAttempt,
         settingsRepository,
     ) {
         if (settingsRepository?.currentAuthMode() != AuthMode.LoggedIn) {
@@ -500,13 +529,20 @@ fun ToreadApp() {
         }
 
         val delayMillis = if (scheduledAuthRefreshRetry) {
-            AccessTokenRefreshRetryDelayMillis
+            authRefreshRetryDelayMillis(authRefreshRetryAttempt)
         } else {
             if (!authSessionReady) return@LaunchedEffect
             accessTokenRefreshDelayMillis(authSessionExpiresInSeconds ?: return@LaunchedEffect)
         }
         delay(delayMillis)
-        refreshAuthSessionIfNeeded(force = true)
+        refreshAuthSessionIfNeeded(
+            force = true,
+            reason = if (scheduledAuthRefreshRetry) {
+                AuthRefreshReasonRetry
+            } else {
+                AuthRefreshReasonTokenExpiry
+            },
+        )
     }
 
     DisposableEffect(progressSyncScheduler, serverConnectionMonitor, settingsRepository, autoSyncEnabled) {
@@ -518,7 +554,10 @@ fun ToreadApp() {
             if (settingsRepository?.currentAuthMode() == AuthMode.LoggedIn) {
                 authSessionReady = false
                 appScope.launch {
-                    val restored = refreshAuthSessionIfNeeded(force = true)
+                    val restored = refreshAuthSessionIfNeeded(
+                        force = true,
+                        reason = AuthRefreshReasonForeground,
+                    )
                     if (restored && autoSyncEnabled) {
                         pendingAutomaticRefresh = createPendingAutomaticRefresh(
                             source = "app_foreground",
@@ -621,7 +660,10 @@ fun ToreadApp() {
                     )
                 }
                 if (shouldRefreshAuth) {
-                    val restored = refreshAuthSessionIfNeeded(force = wasOffline || !authSessionReady)
+                    val restored = refreshAuthSessionIfNeeded(
+                        force = wasOffline || !authSessionReady,
+                        reason = AuthRefreshReasonServerOnline,
+                    )
                     if (
                         restored &&
                         wasOffline &&
@@ -675,6 +717,7 @@ fun ToreadApp() {
                                 authSessionReady = true
                                 authSessionExpiresInSeconds = session.expiresInSeconds
                                 scheduledAuthRefreshRetry = false
+                                authRefreshRetryAttempt = 0
                                 authSessionGeneration++
                                 pendingAutomaticRefresh = createPendingAutomaticRefresh(
                                     source = "auth_completed",
@@ -691,6 +734,7 @@ fun ToreadApp() {
                                     authSessionReady = false
                                     authSessionExpiresInSeconds = null
                                     scheduledAuthRefreshRetry = false
+                                    authRefreshRetryAttempt = 0
                                     pendingAutomaticRefresh = createPendingAutomaticRefresh(
                                         source = "guest_entry",
                                         mode = automaticBookshelfRefreshAfterAuthChoice(AuthMode.Guest),
@@ -770,6 +814,7 @@ fun ToreadApp() {
                                     authSessionReady = false
                                     authSessionExpiresInSeconds = null
                                     scheduledAuthRefreshRetry = false
+                                    authRefreshRetryAttempt = 0
                                     pendingAutomaticRefresh = null
                                     screen = ToreadScreen.Auth
                                 }
@@ -845,6 +890,37 @@ internal fun accessTokenRefreshDelayMillis(expiresInSeconds: Long): Long {
     return (ttlMillis - safetyWindowMillis).coerceAtLeast(AccessTokenRefreshMinimumDelayMillis)
 }
 
+/**
+ * Backoff for retrying a refresh whose outcome stayed ambiguous (timeout, dropped response,
+ * malformed body). The server keeps a consumed refresh token replayable for one hour while its
+ * replacement is unused, so a retry inside that window recovers the session instead of ending it.
+ */
+internal fun authRefreshRetryDelayMillis(retryAttempt: Int): Long {
+    val index = (retryAttempt - 1).coerceIn(0, AuthRefreshRetryDelaysMillis.lastIndex)
+    return AuthRefreshRetryDelaysMillis[index]
+}
+
+private fun logAuthRefreshResult(
+    reason: String,
+    result: AuthClientResult,
+    retryAttempt: Int,
+) {
+    val failure = result as? AuthClientResult.Failure
+    ToreadClientLog.info(
+        AuthLogArea,
+        "auth.refresh_result",
+        "reason" to reason,
+        "outcome" to when {
+            result is AuthClientResult.Success -> "ok"
+            failure?.isConfirmedInvalidRefreshToken() == true -> "rejected"
+            else -> "ambiguous"
+        },
+        "httpStatus" to failure?.httpStatus,
+        "errorCode" to failure?.error,
+        "retryAttempt" to retryAttempt,
+    )
+}
+
 private fun createPendingAutomaticRefresh(
     source: String,
     mode: AutomaticBookshelfRefresh,
@@ -855,10 +931,16 @@ private fun createPendingAutomaticRefresh(
         remoteRefreshPending = mode == AutomaticBookshelfRefresh.RemoteAfterSessionRestore,
     )
 
+private const val AuthLogArea = "auth"
+private const val AuthRefreshReasonUnspecified = "unspecified"
+private const val AuthRefreshReasonTokenExpiry = "access_token_expiry"
+private const val AuthRefreshReasonRetry = "auth_refresh_retry"
+private const val AuthRefreshReasonForeground = "app_foreground"
+private const val AuthRefreshReasonServerOnline = "server_online"
+private val AuthRefreshRetryDelaysMillis = listOf(30_000L, 60_000L, 120_000L, 300_000L)
 private const val AccessTokenRefreshMinSafetyWindowMillis = 5_000L
 private const val AccessTokenRefreshMaxSafetyWindowMillis = 5 * 60_000L
 private const val AccessTokenRefreshMinimumDelayMillis = 1_000L
-private const val AccessTokenRefreshRetryDelayMillis = 30_000L
 
 @Composable
 private fun ServerConnectionOfflineBanner(
@@ -907,11 +989,6 @@ private fun String?.shouldTriggerServerCheck(): Boolean {
         !message.contains("登录", ignoreCase = true) &&
         !message.contains("token", ignoreCase = true)
 }
-
-private fun AuthClientResult.Failure.isInvalidRefreshToken(): Boolean =
-    error == "invalid_refresh_token" ||
-        message.contains("refresh token 无效", ignoreCase = true) ||
-        message.contains("refresh token", ignoreCase = true) && message.contains("过期")
 
 private data class RemoteProgressPullSummary(
     val checked: Int = 0,

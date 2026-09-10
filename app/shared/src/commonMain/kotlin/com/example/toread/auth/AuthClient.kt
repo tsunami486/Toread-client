@@ -12,6 +12,7 @@ import io.ktor.client.request.setBody
 import io.ktor.client.statement.bodyAsText
 import io.ktor.http.ContentType
 import io.ktor.http.HttpHeaders
+import io.ktor.http.HttpStatusCode
 import io.ktor.http.isSuccess
 import io.ktor.serialization.kotlinx.json.json
 import kotlin.coroutines.cancellation.CancellationException
@@ -36,18 +37,26 @@ class AuthClient(
         authenticate(
             path = "/auth/register",
             body = RegisterRequest(email = email.trim(), password = password),
+            timeoutMillis = AuthHttpTimeoutMillis,
         )
 
     suspend fun login(email: String, password: String): AuthClientResult =
         authenticate(
             path = "/auth/login",
             body = LoginRequest(email = email.trim(), password = password),
+            timeoutMillis = AuthHttpTimeoutMillis,
         )
 
+    /**
+     * Refreshing consumes a single-use refresh token on the server, so a timeout is ambiguous rather
+     * than failed: the server may have rotated the token without the response reaching this client.
+     * A longer dedicated timeout keeps that window small.
+     */
     suspend fun refresh(refreshToken: String): AuthClientResult =
         authenticate(
             path = "/auth/refresh",
             body = RefreshRequest(refreshToken = refreshToken),
+            timeoutMillis = AuthRefreshHttpTimeoutMillis,
         )
 
     suspend fun checkServerConnection(): ServerConnectionResult {
@@ -78,14 +87,20 @@ class AuthClient(
     private suspend inline fun <reified T : Any> authenticate(
         path: String,
         body: T,
+        timeoutMillis: Long,
     ): AuthClientResult {
         val baseUrl = baseUrlProvider().trim().trimEnd('/')
         if (baseUrl.isBlank()) {
-            return AuthClientResult.Failure(AuthServiceUnavailableMessage)
+            return AuthClientResult.Failure(message = AuthServiceUnavailableMessage)
         }
 
         return runCatching {
             val response = client.post("$baseUrl$path") {
+                timeout {
+                    connectTimeoutMillis = timeoutMillis
+                    requestTimeoutMillis = timeoutMillis
+                    socketTimeoutMillis = timeoutMillis
+                }
                 header(HttpHeaders.ContentType, ContentType.Application.Json.toString())
                 setBody(body)
             }
@@ -94,6 +109,7 @@ class AuthClient(
                 return AuthClientResult.Failure(
                     message = error.message,
                     error = error.error,
+                    httpStatus = response.status.value,
                 )
             }
 
@@ -108,7 +124,7 @@ class AuthClient(
             )
         }.getOrElse { throwable ->
             if (throwable is CancellationException) throw throwable
-            AuthClientResult.Failure(AuthServiceUnavailableMessage)
+            AuthClientResult.Failure(message = AuthServiceUnavailableMessage)
         }
     }
 }
@@ -122,11 +138,27 @@ data class AuthSession(
 
 sealed interface AuthClientResult {
     data class Success(val session: AuthSession) : AuthClientResult
+
+    /**
+     * @param httpStatus status of a server response, or `null` when the request never produced one
+     *   (network failure, timeout, malformed body). Only a server response can confirm that a
+     *   refresh token is invalid, so a `null` status must stay ambiguous for the caller.
+     */
     data class Failure(
         val message: String,
         val error: String? = null,
+        val httpStatus: Int? = null,
     ) : AuthClientResult
 }
+
+/**
+ * `true` only when the server itself rejected the presented refresh token.
+ *
+ * Network failures, timeouts, malformed error bodies, and intermediary responses stay ambiguous, so
+ * the caller keeps the persisted login and retries instead of clearing the session.
+ */
+internal fun AuthClientResult.Failure.isConfirmedInvalidRefreshToken(): Boolean =
+    httpStatus == HttpStatusCode.Unauthorized.value && error == InvalidRefreshTokenError
 
 sealed interface ServerConnectionResult {
     data object Success : ServerConnectionResult
@@ -228,6 +260,8 @@ private val AuthHttpJson = Json {
 }
 
 private const val AuthHttpTimeoutMillis = 3_000L
+private const val AuthRefreshHttpTimeoutMillis = 15_000L
 private const val HealthCheckHttpTimeoutMillis = 8_000L
+private const val InvalidRefreshTokenError = "invalid_refresh_token"
 private const val NetworkServiceUnavailableMessage = "网络服务暂不可用，请稍后重试。"
 private const val AuthServiceUnavailableMessage = "登录服务暂不可用，请稍后重试。"
