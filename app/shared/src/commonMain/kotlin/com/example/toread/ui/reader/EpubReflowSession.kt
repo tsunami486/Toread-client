@@ -6,6 +6,7 @@ import com.example.toread.reader.EpubLocator
 import com.example.toread.reader.EpubPublicationIndex
 import com.example.toread.reader.ReaderContentBlock
 import com.example.toread.reader.ReaderDocument
+import com.example.toread.reader.toEpubLocatorChapterTitle
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlin.math.abs
@@ -703,6 +704,7 @@ private fun EpubPublicationIndex.toEpubLocator(
         charOffset = null,
         unitIndex = cursor.unitIndex,
         textOffset = cursor.textOffset,
+        chapterTitle = chapter?.title.toEpubLocatorChapterTitle(cursor.chapterOrd),
     )
 }
 

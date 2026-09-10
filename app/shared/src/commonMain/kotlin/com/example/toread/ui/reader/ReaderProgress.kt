@@ -6,6 +6,8 @@ import com.example.toread.reader.BookLocator
 import com.example.toread.reader.EpubLocator
 import com.example.toread.reader.PdfLocator
 import com.example.toread.reader.TxtLocator
+import com.example.toread.reader.toEpubLocatorChapterTitle
+import com.example.toread.reader.toLocatorChapterTitle
 import com.example.toread.progress.SaveProgressResult
 import com.example.toread.sync.ProgressSyncScheduler
 import kotlinx.coroutines.CoroutineScope
@@ -170,6 +172,7 @@ private fun List<ReaderPageSlice>.epubLocatorForPage(
         charOffset = null,
         unitIndex = page?.startLocator?.unitIndex,
         textOffset = page?.startLocator?.textOffset,
+        chapterTitle = page?.chapterTitle.toEpubLocatorChapterTitle(page?.chapterOrd ?: boundedPageIndex),
     )
 }
 
@@ -223,6 +226,10 @@ internal fun saveReaderProgress(
             charOffset = charOffset.toLong(),
             paragraphIndex = null,
             globalProgress = textProgress,
+            chapterTitle = pages.txtChapterTitleForPage(
+                page = page,
+                fallbackTitle = book.title,
+            ),
         )
     }
     return saveReaderLocatorProgress(
@@ -235,6 +242,21 @@ internal fun saveReaderProgress(
         deviceId = deviceId,
         onSyncFinished = onSyncFinished,
     )
+}
+
+private fun List<ReaderPageSlice>.txtChapterTitleForPage(
+    page: ReaderPageSlice?,
+    fallbackTitle: String,
+): String? {
+    page ?: return null
+    val title = page.chapterTitle.toLocatorChapterTitle() ?: return null
+    if (title != fallbackTitle.toLocatorChapterTitle()) return title
+    val firstChapterPage = firstOrNull { candidate ->
+        candidate.chapterOrd == page.chapterOrd
+    }
+    return title.takeIf {
+        firstChapterPage?.lines?.any(ReaderTextLineInfo::isChapterTitle) == true
+    }
 }
 
 internal fun savePdfReaderProgress(

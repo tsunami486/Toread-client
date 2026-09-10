@@ -205,6 +205,7 @@ class EpubReflowSessionTest {
         assertEquals(block.unitIndex, locator.unitIndex)
         assertEquals(37, locator.textOffset)
         assertEquals(null, locator.charOffset)
+        assertEquals(chapterTitle(chapter.ord), locator.chapterTitle)
     }
 
     private fun assertAndroidBounds(state: EpubReflowState) {
