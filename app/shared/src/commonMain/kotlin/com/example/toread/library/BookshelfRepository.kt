@@ -32,6 +32,7 @@ class BookshelfRepository(
                 coverPath = row.cover_path,
                 fileSize = row.file_size,
                 progress = progress?.progress ?: 0.0,
+                locator = BookLocatorJson.decodeOrNull(progress?.locator_json),
                 lastReadAt = row.last_read_at,
                 syncStatus = combineSyncStatus(row.sync_status, progress?.sync_status),
                 bookSyncStatus = row.sync_status,
@@ -133,7 +134,7 @@ class BookshelfRepository(
             .selectProgressByBookHash(bookHash)
             .executeAsOneOrNull()
             ?.locator_json
-            ?.let { runCatching { BookLocatorJson.decode(it) }.getOrNull() }
+            .let(BookLocatorJson::decodeOrNull)
 
     private fun combineSyncStatus(bookSyncStatus: String, progressSyncStatus: String?): String =
         when {
@@ -165,4 +166,5 @@ data class BookshelfBook(
     val syncStatus: String,
     val bookSyncStatus: String,
     val progressSyncStatus: String?,
+    val locator: BookLocator? = null,
 )

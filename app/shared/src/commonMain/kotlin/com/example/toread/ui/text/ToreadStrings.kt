@@ -10,11 +10,13 @@ import kotlin.math.roundToInt
  *
  * Do not put log event names, API/protocol fields, database/sync status values,
  * test fixture text, chapter-detection rules, regular expressions, or character
- * tables here. Use `const val` for static copy and functions for copy that
- * includes runtime values.
+ * tables here. Compose Preview sample copy may live here when it is part of a
+ * reusable visual fixture. Use `const val` for static copy and functions for copy
+ * that includes runtime values.
  */
 object ToreadStrings {
     // Common
+    const val AppName = "同阅"
     const val UnknownError = "未知错误"
     const val BackToBookshelf = "返回书架"
     const val Close = "关闭"
@@ -27,7 +29,6 @@ object ToreadStrings {
     const val Catalog = "目录"
     const val Confirm = "知道了"
     const val NotStarted = "尚未开始"
-    const val JustNow = "刚刚"
     const val UnknownAuthor = "未知作者"
 
     fun failedWithReason(prefix: String, reason: String?): String =
@@ -67,8 +68,8 @@ object ToreadStrings {
     fun shortReasonSuffix(reason: String): String = reason.toShortReasonSuffix()
 
     // Auth
-    const val LoginTitle = "登录 Toread"
-    const val RegisterTitle = "注册 Toread"
+    const val LoginTitle = "登录" + AppName
+    const val RegisterTitle = "注册" + AppName
     const val AuthDescription = "获得更好的多端同步阅读体验"
     const val EmailLabel = "邮箱"
     const val PasswordLabel = "密码"
@@ -114,6 +115,25 @@ object ToreadStrings {
     const val SwitchToListView = "切换为列表模式"
     const val Unread = "未读"
     const val ReadFinished = "已读完"
+    const val FallbackCoverUnknownMark = "?"
+
+    const val BookshelfPreviewCompactLight = "书架 - 360 Compact 浅色"
+    const val BookshelfPreviewMediumDark = "书架 - 600 Medium 深色"
+    const val BookshelfPreviewExpandedLight = "书架 - 840 Expanded 浅色"
+    const val BookshelfPreviewDesktopDark = "书架 - 1280 Desktop 深色"
+    const val BookshelfPreviewUltrawideLight = "书架 - 1920 Ultrawide 浅色"
+    const val BookshelfPreviewLongTitle = "一段足够长、用于验证窄屏省略效果的示例书名"
+    const val BookshelfPreviewAuthor = "示例作者"
+    const val BookshelfPreviewLongChapterTitle = "第四十二章 一段足够长、用于验证章节标题省略效果的标题"
+    const val BookshelfPreviewDragonTitle = "龙族全套 共七册"
+    const val BookshelfPreviewDragonAuthor = "江南"
+    const val BookshelfPreviewJavaTitle = "Java面经"
+    const val BookshelfPreviewTxtTitle = "蛊无删减错别字修正＋文本读者问答"
+    const val BookshelfPreviewFinishedTitle = "已经读完但仍保留在书架中的书"
+    const val BookshelfPreviewUnreadTitle = "尚未开始阅读"
+    const val BookshelfPreviewDesignTitle = "响应式界面设计手册"
+    const val BookshelfPreviewDesignAuthor = "Design Team"
+    const val BookshelfPreviewEighthTitle = "第八本书用于验证末行左对齐"
 
     fun pendingSyncItems(count: Int): String = "$count 项等待同步"
     fun failedSyncItems(count: Int): String = "$count 项同步失败"
@@ -126,8 +146,8 @@ object ToreadStrings {
     fun bookshelfSummary(bookCount: Int, syncSummary: String): String =
         "本地书库 · $bookCount 本书 · $syncSummary"
 
-    fun lastReadAt(label: String): String = "上次阅读：$label"
     fun bookProgress(progress: Double): String = "已读 ${(progress.coerceIn(0.0, 1.0) * 100).roundToInt()}%"
+    fun bookProgressPercent(progress: Double): String = "${(progress.coerceIn(0.0, 1.0) * 100).roundToInt()}%"
     fun bookGridProgress(progress: Double): String = "${(progress.coerceIn(0.0, 1.0) * 1000).roundToInt() / 10.0}%"
     fun bookCoverContentDescription(title: String): String = "$title 封面"
 
@@ -264,7 +284,7 @@ object ToreadStrings {
     const val NotLoggedIn = "未登录"
     const val LocalReadingOnly = "当前仅使用本地阅读数据"
     const val LoginToSync = "登录后可进行跨设备同步"
-    const val AboutToread = "关于 Toread"
+    const val AboutToread = "关于" + AppName
     const val Version100 = "版本 1.0"
     const val AboutDescription = "导入型个人阅读器。本地阅读 EPUB、PDF 和 TXT，同步阅读进度、书签与笔记。"
     const val LogoutState = "退出登录状态"

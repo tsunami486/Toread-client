@@ -25,6 +25,53 @@ data class EpubChapterMetadata(
     val contentWeight: Long,
 )
 
+internal fun String.toEpubHrefLookupKey(): String {
+    val cleanHref = percentDecodeEpubHref(
+        substringBefore('#')
+            .substringBefore('?')
+            .replace('\\', '/'),
+    )
+    val parts = mutableListOf<String>()
+    cleanHref.split('/').forEach { part ->
+        when {
+            part.isBlank() || part == "." -> Unit
+            part == ".." -> if (parts.isNotEmpty()) parts.removeAt(parts.lastIndex)
+            else -> parts += part
+        }
+    }
+    return parts.joinToString("/")
+}
+
+private fun percentDecodeEpubHref(value: String): String {
+    if ('%' !in value) return value
+    val builder = StringBuilder(value.length)
+    val bytes = mutableListOf<Byte>()
+
+    fun flushBytes() {
+        if (bytes.isEmpty()) return
+        builder.append(bytes.toByteArray().decodeToString())
+        bytes.clear()
+    }
+
+    var index = 0
+    while (index < value.length) {
+        val char = value[index]
+        if (char == '%' && index + 2 < value.length) {
+            val decoded = value.substring(index + 1, index + 3).toIntOrNull(16)
+            if (decoded != null) {
+                bytes += decoded.toByte()
+                index += 3
+                continue
+            }
+        }
+        flushBytes()
+        builder.append(char)
+        index++
+    }
+    flushBytes()
+    return builder.toString()
+}
+
 data class ReaderFlowDocument(
     val chapters: List<ReaderFlowChapter>,
 )
