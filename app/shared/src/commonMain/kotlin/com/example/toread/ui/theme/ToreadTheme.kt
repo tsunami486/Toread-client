@@ -134,9 +134,9 @@ internal val MaterialTheme.toreadColors: ToreadExtraColors
 @Composable
 internal fun ToreadTheme(
     useDynamicColor: Boolean,
+    darkTheme: Boolean = isSystemInDarkTheme(),
     content: @Composable () -> Unit,
 ) {
-    val darkTheme = isSystemInDarkTheme()
     val colorScheme = if (useDynamicColor) {
         platformDynamicColorScheme(darkTheme)
     } else {
