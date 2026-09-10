@@ -22,8 +22,15 @@ compose.desktop {
         nativeDistributions {
             targetFormats(TargetFormat.Dmg, TargetFormat.Msi, TargetFormat.Deb)
             modules("java.instrument", "java.management", "java.sql", "jdk.unsupported")
-            packageName = "com.example.toread"
+            packageName = "同阅"
             packageVersion = "1.0.0"
+            windows {
+                iconFile.set(project.file("src/main/resources/tongyue-icon.ico"))
+            }
+            linux {
+                packageName = "tongyue"
+                iconFile.set(project.file("src/main/resources/tongyue-icon.png"))
+            }
         }
     }
 }

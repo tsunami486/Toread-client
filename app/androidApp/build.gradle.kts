@@ -8,6 +8,32 @@ plugins {
     alias(libs.plugins.composeCompiler)
 }
 
+val defaultReleaseSigningPropertiesFile =
+    File(System.getProperty("user.home"), ".toread/signing/release.properties")
+val releaseSigningPropertiesFile = providers.gradleProperty("toread.releaseSigningProperties")
+    .orElse(providers.environmentVariable("TOREAD_RELEASE_SIGNING_PROPERTIES"))
+    .orNull
+    ?.let { file(it) }
+    ?: defaultReleaseSigningPropertiesFile
+val releaseSigningProperties = Properties().apply {
+    if (releaseSigningPropertiesFile.isFile) {
+        releaseSigningPropertiesFile.inputStream().use(::load)
+    }
+}
+val releaseSigningConfigured = releaseSigningPropertiesFile.isFile
+
+fun requiredReleaseSigningProperty(name: String): String =
+    releaseSigningProperties.getProperty(name)?.takeIf(String::isNotBlank)
+        ?: throw GradleException(
+            "Missing '$name' in release signing properties: ${releaseSigningPropertiesFile.absolutePath}",
+        )
+
+val releaseSigningStoreFile = if (releaseSigningConfigured) {
+    file(requiredReleaseSigningProperty("storeFile"))
+} else {
+    null
+}
+
 kotlin {
     compilerOptions {
         jvmTarget = JvmTarget.JVM_11
@@ -28,11 +54,21 @@ android {
     compileSdk = libs.versions.android.compileSdk.get().toInt()
 
     defaultConfig {
-        applicationId = "com.example.toread"
+        applicationId = "cn.toreadapp.reader"
         minSdk = libs.versions.android.minSdk.get().toInt()
         targetSdk = libs.versions.android.targetSdk.get().toInt()
         versionCode = 2
         versionName = "1.0.1"
+    }
+    signingConfigs {
+        if (releaseSigningConfigured) {
+            create("release") {
+                storeFile = releaseSigningStoreFile
+                storePassword = requiredReleaseSigningProperty("storePassword")
+                keyAlias = requiredReleaseSigningProperty("keyAlias")
+                keyPassword = requiredReleaseSigningProperty("keyPassword")
+            }
+        }
     }
     packaging {
         resources {
@@ -40,14 +76,46 @@ android {
         }
     }
     buildTypes {
+        getByName("debug") {
+            applicationIdSuffix = ".debug"
+            versionNameSuffix = "-debug"
+        }
         getByName("release") {
             isMinifyEnabled = false
+            if (releaseSigningConfigured) {
+                signingConfig = signingConfigs.getByName("release")
+            }
         }
     }
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_11
         targetCompatibility = JavaVersion.VERSION_11
     }
+}
+
+val validateReleaseSigning by tasks.registering {
+    group = "verification"
+    description = "Fails release builds unless the external Toread signing configuration is complete."
+    inputs.property("releaseSigningPropertiesPath", releaseSigningPropertiesFile.absolutePath)
+    inputs.property("releaseSigningStorePath", releaseSigningStoreFile?.absolutePath.orEmpty())
+
+    doLast {
+        val propertiesPath = inputs.properties.getValue("releaseSigningPropertiesPath").toString()
+        val storePath = inputs.properties.getValue("releaseSigningStorePath").toString()
+        if (!File(propertiesPath).isFile) {
+            throw GradleException(
+                "Release signing properties not found: $propertiesPath. " +
+                    "Run client/app/androidApp/scripts/Initialize-ReleaseSigning.ps1 once.",
+            )
+        }
+        if (storePath.isBlank() || !File(storePath).isFile) {
+            throw GradleException("Release keystore not found: $storePath")
+        }
+    }
+}
+
+tasks.matching { it.name == "preReleaseBuild" }.configureEach {
+    dependsOn(validateReleaseSigning)
 }
 
 tasks.register<Exec>("runAndroidDebug") {
@@ -68,7 +136,7 @@ tasks.register<Exec>("runAndroidDebug") {
             "am",
             "start",
             "-n",
-            "${android.defaultConfig.applicationId}/.MainActivity",
+            "${android.defaultConfig.applicationId}.debug/${android.namespace}.MainActivity",
         )
     }
 }
