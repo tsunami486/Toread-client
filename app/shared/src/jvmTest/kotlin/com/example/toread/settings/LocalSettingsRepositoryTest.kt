@@ -8,6 +8,27 @@ import kotlin.test.assertEquals
 
 class LocalSettingsRepositoryTest {
     @Test
+    fun authChoiceRoundTripsAndCanBeCleared() {
+        val repository = testRepository()
+
+        assertEquals(null, repository.currentAuthMode())
+
+        repository.setGuestMode()
+        assertEquals(AuthMode.Guest, repository.currentAuthMode())
+
+        repository.setLoggedIn("reader@example.com")
+        repository.setRefreshToken("refresh-token")
+        assertEquals(AuthMode.LoggedIn, repository.currentAuthMode())
+        assertEquals("reader@example.com", repository.userEmail())
+        assertEquals("refresh-token", repository.refreshToken())
+
+        repository.clearAuthMode()
+        assertEquals(null, repository.currentAuthMode())
+        assertEquals(null, repository.userEmail())
+        assertEquals(null, repository.refreshToken())
+    }
+
+    @Test
     fun pdfPreferencesUseSafeDefaultsWhenNoSettingsExist() {
         val repository = testRepository()
 

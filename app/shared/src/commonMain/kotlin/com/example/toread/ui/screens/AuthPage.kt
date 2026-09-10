@@ -23,6 +23,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.example.toread.auth.AuthClient
 import com.example.toread.auth.AuthClientResult
+import com.example.toread.auth.AuthSession
 import com.example.toread.settings.LocalSettingsRepository
 import com.example.toread.ui.components.ScreenColumn
 import com.example.toread.ui.text.ToreadStrings
@@ -32,7 +33,7 @@ import kotlinx.coroutines.launch
 internal fun AuthPage(
     settingsRepository: LocalSettingsRepository?,
     authClient: AuthClient?,
-    onAuthenticated: () -> Unit,
+    onAuthenticated: suspend (AuthSession) -> Unit,
     onGuestMode: () -> Unit,
 ) {
     val scope = rememberCoroutineScope()
@@ -86,9 +87,7 @@ internal fun AuthPage(
                         }
                         when (result) {
                             is AuthClientResult.Success -> {
-                                settingsRepository?.setLoggedIn(result.session.email)
-                                settingsRepository?.setRefreshToken(result.session.refreshToken)
-                                onAuthenticated()
+                                onAuthenticated(result.session)
                             }
                             is AuthClientResult.Failure -> {
                                 authError = ToreadStrings.safeUserVisibleMessage(

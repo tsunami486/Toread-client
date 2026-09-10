@@ -1,6 +1,5 @@
 package com.example.toread.auth
 
-import com.example.toread.platform.SecureTokenStore
 import io.ktor.client.HttpClient
 import io.ktor.client.plugins.HttpTimeout
 import io.ktor.client.plugins.timeout
@@ -15,13 +14,13 @@ import io.ktor.http.ContentType
 import io.ktor.http.HttpHeaders
 import io.ktor.http.isSuccess
 import io.ktor.serialization.kotlinx.json.json
+import kotlin.coroutines.cancellation.CancellationException
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
 
 class AuthClient(
     private val baseUrlProvider: () -> String,
-    private val tokenStore: SecureTokenStore,
     private val client: HttpClient = HttpClient {
         install(HttpTimeout) {
             connectTimeoutMillis = AuthHttpTimeoutMillis
@@ -71,6 +70,7 @@ class AuthClient(
                 ServerConnectionResult.Failure(NetworkServiceUnavailableMessage)
             }
         }.getOrElse { throwable ->
+            if (throwable is CancellationException) throw throwable
             ServerConnectionResult.Failure(NetworkServiceUnavailableMessage)
         }
     }
@@ -98,15 +98,16 @@ class AuthClient(
             }
 
             val auth = response.body<AuthResponse>()
-            tokenStore.saveToken(auth.tokens.accessToken)
             AuthClientResult.Success(
                 AuthSession(
                     email = auth.user.email,
                     accessToken = auth.tokens.accessToken,
                     refreshToken = auth.tokens.refreshToken,
+                    expiresInSeconds = auth.tokens.expiresIn,
                 ),
             )
         }.getOrElse { throwable ->
+            if (throwable is CancellationException) throw throwable
             AuthClientResult.Failure(AuthServiceUnavailableMessage)
         }
     }
@@ -116,6 +117,7 @@ data class AuthSession(
     val email: String,
     val accessToken: String,
     val refreshToken: String,
+    val expiresInSeconds: Long,
 )
 
 sealed interface AuthClientResult {

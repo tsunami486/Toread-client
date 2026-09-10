@@ -55,21 +55,43 @@ import com.example.toread.sync.SyncQueueProcessor
 import com.example.toread.ui.screens.AuthPage
 import com.example.toread.ui.screens.BookshelfLayoutMode
 import com.example.toread.ui.screens.BookshelfPage
+import com.example.toread.ui.screens.CheckingAuthPage
 import com.example.toread.ui.screens.ImportPage
 import com.example.toread.ui.screens.ReaderPage
 import com.example.toread.ui.screens.SettingsPage
 import com.example.toread.ui.text.ToreadStrings
 import com.example.toread.ui.theme.ToreadTheme
 import kotlinx.coroutines.flow.collect
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 
-private enum class ToreadScreen {
+internal enum class ToreadScreen {
+    CheckingAuth,
     Auth,
     Bookshelf,
     Import,
     Reader,
     Settings,
 }
+
+internal enum class AutomaticBookshelfRefresh {
+    None,
+    LocalOnly,
+    RemoteAfterSessionRestore,
+}
+
+internal data class ToreadStartupPlan(
+    val screen: ToreadScreen,
+    val automaticRefresh: AutomaticBookshelfRefresh,
+)
+
+private data class PendingAutomaticRefresh(
+    val source: String,
+    val localRefreshPending: Boolean,
+    val remoteRefreshPending: Boolean,
+)
 
 @Composable
 @Preview
@@ -82,10 +104,16 @@ fun ToreadApp() {
     val platform = remember { getPlatform() }
     val appScope = rememberCoroutineScope()
     val snackbarHostState = remember { SnackbarHostState() }
-    var screen by remember { mutableStateOf(ToreadScreen.Bookshelf) }
+    var screen by remember { mutableStateOf(ToreadScreen.CheckingAuth) }
     var selectedBook by remember { mutableStateOf<BookshelfBook?>(null) }
     var books by remember { mutableStateOf<List<BookshelfBook>>(emptyList()) }
     var refreshKey by remember { mutableIntStateOf(0) }
+    var pendingAutomaticRefresh by remember { mutableStateOf<PendingAutomaticRefresh?>(null) }
+    var authSessionReady by remember { mutableStateOf(false) }
+    var authSessionGeneration by remember { mutableIntStateOf(0) }
+    var authIdentityGeneration by remember { mutableIntStateOf(0) }
+    var authSessionExpiresInSeconds by remember { mutableStateOf<Long?>(null) }
+    var scheduledAuthRefreshRetry by remember { mutableStateOf(false) }
     var dynamicColorEnabled by remember { mutableStateOf(false) }
     val autoSyncEnabledState = remember { mutableStateOf(true) }
     var autoSyncEnabled by autoSyncEnabledState
@@ -97,9 +125,11 @@ fun ToreadApp() {
     var previousServerConnectionState by remember { mutableStateOf<ServerConnectionState?>(null) }
 
     fun showAppMessage(message: String) {
-        appScope.launch {
-            snackbarHostState.currentSnackbarData?.dismiss()
-            snackbarHostState.showSnackbar(ToreadStrings.safeUserVisibleMessage(message))
+        if(screen!= ToreadScreen.Reader) {
+            appScope.launch {
+                snackbarHostState.currentSnackbarData?.dismiss()
+                snackbarHostState.showSnackbar(ToreadStrings.safeUserVisibleMessage(message))
+            }
         }
     }
 
@@ -111,12 +141,12 @@ fun ToreadApp() {
     val settingsRepository = remember(database) { database?.let { LocalSettingsRepository(it) } }
     val readerContentLoader = remember { ReaderContentLoader() }
     val tokenStore = remember { SecureTokenStore() }
+    val authRefreshMutex = remember { Mutex() }
     val serverBaseUrl = remember(platform.kind) { ServerBaseUrlConfig.resolve(platform.kind) }
-    val authClient = remember(settingsRepository, tokenStore, serverBaseUrl) {
+    val authClient = remember(settingsRepository, serverBaseUrl) {
         if (settingsRepository != null) {
             AuthClient(
                 baseUrlProvider = { serverBaseUrl },
-                tokenStore = tokenStore,
             )
         } else {
             null
@@ -244,30 +274,100 @@ fun ToreadApp() {
         )
     }
 
-    suspend fun refreshAuthSessionIfNeeded() {
-        val repository = settingsRepository ?: return
-        val client = authClient ?: return
-        if (repository.currentAuthMode() != AuthMode.LoggedIn) return
-
-        val refreshToken = repository.refreshToken()
-        if (refreshToken.isNullOrBlank()) return
-
-        when (val result = client.refresh(refreshToken)) {
-            is AuthClientResult.Success -> {
-                repository.setLoggedIn(result.session.email)
-                repository.setRefreshToken(result.session.refreshToken)
-                serverConnectionMonitor?.markOnline("auth.refresh")
+    suspend fun refreshAuthSessionIfNeeded(force: Boolean = false): Boolean {
+        val requestedIdentityGeneration = authIdentityGeneration
+        val requestedRefreshToken = settingsRepository?.refreshToken()
+        return authRefreshMutex.withLock {
+            val repository = settingsRepository ?: return@withLock false
+            val client = authClient ?: return@withLock false
+            if (authIdentityGeneration != requestedIdentityGeneration) {
+                return@withLock false
             }
-            is AuthClientResult.Failure -> {
-                if (result.isInvalidRefreshToken()) {
-                    tokenStore.clear()
-                    repository.clearAuthMode()
-                    showAppMessage(ToreadStrings.LoginExpired)
-                    return
+            if (repository.currentAuthMode() != AuthMode.LoggedIn) {
+                authSessionReady = false
+                return@withLock false
+            }
+
+            val refreshToken = repository.refreshToken()
+            if (
+                refreshToken != requestedRefreshToken &&
+                authSessionReady
+            ) {
+                return@withLock true
+            }
+            if (!force && authSessionReady && !tokenStore.getToken().isNullOrBlank()) {
+                return@withLock true
+            }
+            if (refreshToken.isNullOrBlank()) {
+                tokenStore.clear()
+                repository.clearAuthMode()
+                authSessionReady = false
+                authSessionExpiresInSeconds = null
+                scheduledAuthRefreshRetry = false
+                pendingAutomaticRefresh = null
+                selectedBook = null
+                screen = ToreadScreen.Auth
+                showAppMessage(ToreadStrings.LoginExpired)
+                return@withLock false
+            }
+
+            when (val result = client.refresh(refreshToken)) {
+                is AuthClientResult.Success -> {
+                    if (
+                        authIdentityGeneration != requestedIdentityGeneration ||
+                        repository.currentAuthMode() != AuthMode.LoggedIn ||
+                        repository.refreshToken() != refreshToken
+                    ) {
+                        return@withLock false
+                    }
+                    tokenStore.saveToken(result.session.accessToken)
+                    repository.setLoggedIn(result.session.email)
+                    repository.setRefreshToken(result.session.refreshToken)
+                    authSessionReady = true
+                    authSessionExpiresInSeconds = result.session.expiresInSeconds
+                    scheduledAuthRefreshRetry = false
+                    authSessionGeneration++
+                    if (
+                        autoSyncEnabled &&
+                        pendingAutomaticRefresh?.remoteRefreshPending != true
+                    ) {
+                        pendingAutomaticRefresh = createPendingAutomaticRefresh(
+                            source = "auth_session_refreshed",
+                            mode = AutomaticBookshelfRefresh.RemoteAfterSessionRestore,
+                        ).copy(localRefreshPending = false)
+                    }
+                    serverConnectionMonitor?.markOnline("auth.refresh")
+                    true
                 }
-                showAppMessage(ToreadStrings.refreshAuthFailed(result.message))
-                if (result.message.shouldTriggerServerCheck()) {
-                    serverConnectionMonitor?.triggerCheck("auth_refresh_failed")
+                is AuthClientResult.Failure -> {
+                    if (
+                        authIdentityGeneration != requestedIdentityGeneration ||
+                        repository.currentAuthMode() != AuthMode.LoggedIn ||
+                        repository.refreshToken() != refreshToken
+                    ) {
+                        return@withLock false
+                    }
+                    if (result.isInvalidRefreshToken()) {
+                        tokenStore.clear()
+                        repository.clearAuthMode()
+                        authSessionReady = false
+                        authSessionExpiresInSeconds = null
+                        scheduledAuthRefreshRetry = false
+                        pendingAutomaticRefresh = null
+                        selectedBook = null
+                        screen = ToreadScreen.Auth
+                        showAppMessage(ToreadStrings.LoginExpired)
+                        false
+                    } else {
+                        authSessionReady = false
+                        scheduledAuthRefreshRetry = true
+                        authSessionGeneration++
+                        showAppMessage(ToreadStrings.refreshAuthFailed(result.message))
+                        if (result.message.shouldTriggerServerCheck()) {
+                            serverConnectionMonitor?.triggerCheck("auth_refresh_failed")
+                        }
+                        false
+                    }
                 }
             }
         }
@@ -301,18 +401,33 @@ fun ToreadApp() {
     fun runSyncAndRefresh(
         showResult: Boolean = true,
         source: String = "manual_refresh",
+        includeLocalRefresh: Boolean = true,
+        includeRemoteSync: Boolean = true,
     ) {
         if (syncRunning) return
         syncRunning = true
         appScope.launch {
             try {
-                bookshelfRepository?.refreshMissingEpubCovers()
-                bookshelfRepository?.refreshMissingEpubMetadata()
-                bookshelfRepository?.ensurePendingBookMetadataQueued()
-                val summary = syncQueueProcessor?.flushPending(limit = Int.MAX_VALUE)
-                val remoteSummary = pullRemoteProgressForBooks()
-                updateConnectionAfterSync(summary, remoteSummary, source)
+                if (includeLocalRefresh) {
+                    bookshelfRepository?.refreshMissingEpubCovers()
+                    bookshelfRepository?.refreshMissingEpubMetadata()
+                    bookshelfRepository?.ensurePendingBookMetadataQueued()
+                }
+                val summary = if (includeRemoteSync) {
+                    syncQueueProcessor?.flushPending(limit = Int.MAX_VALUE)
+                } else {
+                    null
+                }
+                val remoteSummary = if (includeRemoteSync) {
+                    pullRemoteProgressForBooks()
+                } else {
+                    RemoteProgressPullSummary()
+                }
+                if (includeRemoteSync) {
+                    updateConnectionAfterSync(summary, remoteSummary, source)
+                }
                 val resultMessage = when {
+                    !includeRemoteSync -> ToreadStrings.RefreshSuccess
                     summary == null -> ToreadStrings.refreshFailed(ToreadStrings.SyncServiceUnavailable)
                     summary.failed > 0 -> ToreadStrings.refreshFailed(summary.lastError ?: ToreadStrings.UnknownError)
                     summary.skipped > 0 -> ToreadStrings.refreshFailed(summary.lastError ?: ToreadStrings.CurrentOffline)
@@ -328,7 +443,9 @@ fun ToreadApp() {
                 }
                 refreshKey++
             } catch (throwable: Throwable) {
-                serverConnectionMonitor?.triggerCheck(source)
+                if (includeRemoteSync) {
+                    serverConnectionMonitor?.triggerCheck(source)
+                }
                 if (showResult) {
                     showAppMessage(ToreadStrings.refreshFailed(ToreadStrings.RefreshUnexpectedFailure))
                 }
@@ -338,12 +455,82 @@ fun ToreadApp() {
         }
     }
 
-    DisposableEffect(progressSyncScheduler, serverConnectionMonitor) {
+    LaunchedEffect(pendingAutomaticRefresh, authSessionReady, syncRunning) {
+        val pending = pendingAutomaticRefresh ?: return@LaunchedEffect
+        if (syncRunning) return@LaunchedEffect
+
+        val canRunRemoteRefresh = pending.remoteRefreshPending && authSessionReady
+        val includeLocalRefresh: Boolean
+        val includeRemoteSync: Boolean
+        when {
+            pending.localRefreshPending && (!pending.remoteRefreshPending || canRunRemoteRefresh) -> {
+                includeLocalRefresh = true
+                includeRemoteSync = canRunRemoteRefresh
+                pendingAutomaticRefresh = null
+            }
+            pending.localRefreshPending -> {
+                includeLocalRefresh = true
+                includeRemoteSync = false
+                pendingAutomaticRefresh = pending.copy(localRefreshPending = false)
+            }
+            canRunRemoteRefresh -> {
+                includeLocalRefresh = false
+                includeRemoteSync = true
+                pendingAutomaticRefresh = null
+            }
+            else -> return@LaunchedEffect
+        }
+        runSyncAndRefresh(
+            showResult = false,
+            source = pending.source,
+            includeLocalRefresh = includeLocalRefresh,
+            includeRemoteSync = includeRemoteSync,
+        )
+    }
+
+    LaunchedEffect(
+        authSessionGeneration,
+        authSessionReady,
+        authSessionExpiresInSeconds,
+        scheduledAuthRefreshRetry,
+        settingsRepository,
+    ) {
+        if (settingsRepository?.currentAuthMode() != AuthMode.LoggedIn) {
+            return@LaunchedEffect
+        }
+
+        val delayMillis = if (scheduledAuthRefreshRetry) {
+            AccessTokenRefreshRetryDelayMillis
+        } else {
+            if (!authSessionReady) return@LaunchedEffect
+            accessTokenRefreshDelayMillis(authSessionExpiresInSeconds ?: return@LaunchedEffect)
+        }
+        delay(delayMillis)
+        refreshAuthSessionIfNeeded(force = true)
+    }
+
+    DisposableEffect(progressSyncScheduler, serverConnectionMonitor, settingsRepository, autoSyncEnabled) {
         AppBackgroundNotifier.setOnEnterBackground {
             progressSyncScheduler.flushNow()
         }
+        AppBackgroundNotifier.setOnEnterForeground {
+            serverConnectionMonitor?.triggerCheck("app_foreground")
+            if (settingsRepository?.currentAuthMode() == AuthMode.LoggedIn) {
+                authSessionReady = false
+                appScope.launch {
+                    val restored = refreshAuthSessionIfNeeded(force = true)
+                    if (restored && autoSyncEnabled) {
+                        pendingAutomaticRefresh = createPendingAutomaticRefresh(
+                            source = "app_foreground",
+                            mode = AutomaticBookshelfRefresh.RemoteAfterSessionRestore,
+                        ).copy(localRefreshPending = false)
+                    }
+                }
+            }
+        }
         onDispose {
             AppBackgroundNotifier.setOnEnterBackground(null)
+            AppBackgroundNotifier.setOnEnterForeground(null)
         }
     }
 
@@ -376,10 +563,27 @@ fun ToreadApp() {
     }
 
     LaunchedEffect(settingsRepository) {
-        dynamicColorEnabled = settingsRepository?.dynamicColorEnabled() ?: false
-        autoSyncEnabled = settingsRepository?.autoSyncEnabled() ?: true
-        bookshelfLayoutMode = BookshelfLayoutMode.fromStoredValue(settingsRepository?.bookshelfLayoutMode())
+        val repository = settingsRepository
+        dynamicColorEnabled = repository?.dynamicColorEnabled() ?: false
+        val storedAutoSyncEnabled = repository?.autoSyncEnabled() ?: true
+        autoSyncEnabled = storedAutoSyncEnabled
+        bookshelfLayoutMode = BookshelfLayoutMode.fromStoredValue(repository?.bookshelfLayoutMode())
             ?: BookshelfLayoutMode.Grid
+
+        val authMode = repository?.currentAuthMode()
+        authSessionReady = false
+        authSessionExpiresInSeconds = null
+        val startupPlan = initialToreadStartupPlan(
+            authMode = authMode,
+            autoSyncEnabled = storedAutoSyncEnabled,
+        )
+        screen = startupPlan.screen
+        if (startupPlan.automaticRefresh != AutomaticBookshelfRefresh.None) {
+            pendingAutomaticRefresh = createPendingAutomaticRefresh(
+                source = "app_start",
+                mode = startupPlan.automaticRefresh,
+            )
+        }
     }
 
     LaunchedEffect(serverConnectionState, settingsRepository, authClient, autoSyncEnabled) {
@@ -394,33 +598,46 @@ fun ToreadApp() {
             }
             is ServerConnectionState.Online -> {
                 val wasOffline = previous is ServerConnectionState.Offline
+                val hadPendingRemoteRefresh =
+                    pendingAutomaticRefresh?.remoteRefreshPending == true
                 val shouldRefreshAuth = previous == null ||
                     previous is ServerConnectionState.Checking ||
-                    wasOffline
+                    wasOffline ||
+                    hadPendingRemoteRefresh && !authSessionReady ||
+                    scheduledAuthRefreshRetry
                 if (wasOffline) {
                     showAppMessage(ToreadStrings.ServerReconnectedSnackbar)
                 }
-                if (shouldRefreshAuth) {
-                    refreshAuthSessionIfNeeded()
+                if (
+                    wasOffline &&
+                    autoSyncEnabled &&
+                    settingsRepository?.currentAuthMode() == AuthMode.LoggedIn &&
+                    !hadPendingRemoteRefresh
+                ) {
+                    authSessionReady = false
+                    pendingAutomaticRefresh = createPendingAutomaticRefresh(
+                        source = "server_reconnected",
+                        mode = AutomaticBookshelfRefresh.RemoteAfterSessionRestore,
+                    )
                 }
-                if (wasOffline && autoSyncEnabled) {
-                    runSyncAndRefresh(showResult = false, source = "server_reconnected")
+                if (shouldRefreshAuth) {
+                    val restored = refreshAuthSessionIfNeeded(force = wasOffline || !authSessionReady)
+                    if (
+                        restored &&
+                        wasOffline &&
+                        autoSyncEnabled &&
+                        settingsRepository?.currentAuthMode() == AuthMode.LoggedIn &&
+                        pendingAutomaticRefresh?.remoteRefreshPending != true
+                    ) {
+                        pendingAutomaticRefresh = createPendingAutomaticRefresh(
+                            source = "server_reconnected",
+                            mode = AutomaticBookshelfRefresh.RemoteAfterSessionRestore,
+                        ).copy(localRefreshPending = false)
+                    }
                 }
             }
             is ServerConnectionState.Checking -> Unit
         }
-    }
-
-    LaunchedEffect(bookshelfRepository) {
-        val repository = bookshelfRepository ?: return@LaunchedEffect
-        val repaired = runCatching {
-            val updated = repository.refreshMissingEpubMetadata()
-            if (updated > 0) repository.ensurePendingBookMetadataQueued()
-            updated
-        }
-            .onFailure { showAppMessage(ToreadStrings.readBookshelfFailed(it.message)) }
-            .getOrDefault(0)
-        if (repaired > 0) refreshKey++
     }
 
     LaunchedEffect(bookshelfRepository, refreshKey) {
@@ -430,13 +647,14 @@ fun ToreadApp() {
     }
 
     val isReaderScreen = screen == ToreadScreen.Reader
+    val isBookshelfScreen = screen == ToreadScreen.Bookshelf
 
     ToreadTheme(useDynamicColor = dynamicColorEnabled) {
         Surface(
             modifier = Modifier
                 .fillMaxSize()
                 .background(MaterialTheme.colorScheme.background)
-                .then(appContentPadding(platform.kind, isReaderScreen)),
+                .then(appContentPadding(platform.kind, isReaderScreen, isBookshelfScreen)),
         ) {
             Box(modifier = Modifier.fillMaxSize()) {
                 Box(
@@ -444,25 +662,46 @@ fun ToreadApp() {
                         .fillMaxSize(),
                 ) {
                     when (screen) {
+                        ToreadScreen.CheckingAuth -> CheckingAuthPage()
                         ToreadScreen.Auth -> AuthPage(
                             settingsRepository = settingsRepository,
                             authClient = authClient,
-                            onAuthenticated = {
+                            onAuthenticated = { session ->
+                                authIdentityGeneration++
+                                tokenStore.saveToken(session.accessToken)
+                                settingsRepository?.setLoggedIn(session.email)
+                                settingsRepository?.setRefreshToken(session.refreshToken)
                                 refreshKey++
+                                authSessionReady = true
+                                authSessionExpiresInSeconds = session.expiresInSeconds
+                                scheduledAuthRefreshRetry = false
+                                authSessionGeneration++
+                                pendingAutomaticRefresh = createPendingAutomaticRefresh(
+                                    source = "auth_completed",
+                                    mode = automaticBookshelfRefreshAfterAuthChoice(AuthMode.LoggedIn),
+                                )
                                 screen = ToreadScreen.Bookshelf
-                                runSyncAndRefresh()
                             },
                             onGuestMode = {
                                 appScope.launch {
+                                    authIdentityGeneration++
                                     tokenStore.clear()
                                     settingsRepository?.setGuestMode()
                                     refreshKey++
+                                    authSessionReady = false
+                                    authSessionExpiresInSeconds = null
+                                    scheduledAuthRefreshRetry = false
+                                    pendingAutomaticRefresh = createPendingAutomaticRefresh(
+                                        source = "guest_entry",
+                                        mode = automaticBookshelfRefreshAfterAuthChoice(AuthMode.Guest),
+                                    )
                                     screen = ToreadScreen.Bookshelf
                                 }
                             },
                         )
                         ToreadScreen.Bookshelf -> BookshelfPage(
                             books = books,
+                            readerContentLoader = readerContentLoader,
                             isDesktop = platform.kind == PlatformKind.Desktop,
                             layoutMode = bookshelfLayoutMode,
                             onLayoutModeChange = { mode ->
@@ -480,7 +719,10 @@ fun ToreadApp() {
                         )
                         ToreadScreen.Import -> ImportPage(
                             importService = importService,
-                            onImported = { refreshKey++ },
+                            onImported = {
+                                progressSyncScheduler.requestFlush()
+                                refreshKey++
+                            },
                             onBack = {
                                 refreshKey++
                                 screen = ToreadScreen.Bookshelf
@@ -513,6 +755,7 @@ fun ToreadApp() {
                             onAutoSyncEnabledChange = { enabled ->
                                 settingsRepository?.setAutoSyncEnabled(enabled)
                                 autoSyncEnabled = enabled
+                                if (enabled) progressSyncScheduler.requestFlush()
                             },
                             onBack = {
                                 refreshKey++
@@ -520,9 +763,14 @@ fun ToreadApp() {
                             },
                             onLogout = {
                                 appScope.launch {
+                                    authIdentityGeneration++
                                     tokenStore.clear()
                                     settingsRepository?.clearAuthMode()
                                     selectedBook = null
+                                    authSessionReady = false
+                                    authSessionExpiresInSeconds = null
+                                    scheduledAuthRefreshRetry = false
+                                    pendingAutomaticRefresh = null
                                     screen = ToreadScreen.Auth
                                 }
                             },
@@ -552,6 +800,66 @@ fun ToreadApp() {
     }
 }
 
+internal fun initialToreadStartupPlan(
+    authMode: AuthMode?,
+    autoSyncEnabled: Boolean,
+): ToreadStartupPlan =
+    when (authMode) {
+        null -> ToreadStartupPlan(
+            screen = ToreadScreen.Auth,
+            automaticRefresh = AutomaticBookshelfRefresh.None,
+        )
+        AuthMode.Guest -> ToreadStartupPlan(
+            screen = ToreadScreen.Bookshelf,
+            automaticRefresh = AutomaticBookshelfRefresh.LocalOnly,
+        )
+        AuthMode.LoggedIn -> ToreadStartupPlan(
+            screen = ToreadScreen.Bookshelf,
+            automaticRefresh = automaticBookshelfRefresh(authMode, autoSyncEnabled),
+        )
+    }
+
+internal fun automaticBookshelfRefresh(
+    authMode: AuthMode,
+    autoSyncEnabled: Boolean,
+): AutomaticBookshelfRefresh =
+    if (authMode == AuthMode.LoggedIn && autoSyncEnabled) {
+        AutomaticBookshelfRefresh.RemoteAfterSessionRestore
+    } else {
+        AutomaticBookshelfRefresh.LocalOnly
+    }
+
+internal fun automaticBookshelfRefreshAfterAuthChoice(authMode: AuthMode): AutomaticBookshelfRefresh =
+    when (authMode) {
+        AuthMode.LoggedIn -> AutomaticBookshelfRefresh.RemoteAfterSessionRestore
+        AuthMode.Guest -> AutomaticBookshelfRefresh.LocalOnly
+    }
+
+internal fun accessTokenRefreshDelayMillis(expiresInSeconds: Long): Long {
+    val ttlMillis = expiresInSeconds.coerceAtLeast(1L)
+        .coerceAtMost(Long.MAX_VALUE / 1_000L) * 1_000L
+    val safetyWindowMillis = minOf(
+        AccessTokenRefreshMaxSafetyWindowMillis,
+        (ttlMillis / 10L).coerceAtLeast(AccessTokenRefreshMinSafetyWindowMillis),
+    )
+    return (ttlMillis - safetyWindowMillis).coerceAtLeast(AccessTokenRefreshMinimumDelayMillis)
+}
+
+private fun createPendingAutomaticRefresh(
+    source: String,
+    mode: AutomaticBookshelfRefresh,
+): PendingAutomaticRefresh =
+    PendingAutomaticRefresh(
+        source = source,
+        localRefreshPending = mode != AutomaticBookshelfRefresh.None,
+        remoteRefreshPending = mode == AutomaticBookshelfRefresh.RemoteAfterSessionRestore,
+    )
+
+private const val AccessTokenRefreshMinSafetyWindowMillis = 5_000L
+private const val AccessTokenRefreshMaxSafetyWindowMillis = 5 * 60_000L
+private const val AccessTokenRefreshMinimumDelayMillis = 1_000L
+private const val AccessTokenRefreshRetryDelayMillis = 30_000L
+
 @Composable
 private fun ServerConnectionOfflineBanner(
     state: ServerConnectionState.Offline,
@@ -575,9 +883,15 @@ private fun ServerConnectionOfflineBanner(
 }
 
 @Composable
-private fun appContentPadding(platformKind: PlatformKind, isReaderScreen: Boolean): Modifier =
+private fun appContentPadding(
+    platformKind: PlatformKind,
+    isReaderScreen: Boolean,
+    isBookshelfScreen: Boolean,
+): Modifier =
     when {
         isReaderScreen -> Modifier
+        isBookshelfScreen && platformKind == PlatformKind.Desktop -> Modifier
+        isBookshelfScreen -> Modifier.windowInsetsPadding(WindowInsets.safeContent)
         platformKind == PlatformKind.Desktop -> Modifier.padding(horizontal = 24.dp)
         else -> Modifier.windowInsetsPadding(
             WindowInsets.safeContent.union(
