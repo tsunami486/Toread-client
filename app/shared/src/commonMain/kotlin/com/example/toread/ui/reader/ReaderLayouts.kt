@@ -41,6 +41,7 @@ import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.PlainTooltip
+import androidx.compose.material3.Slider
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TooltipAnchorPosition
@@ -693,6 +694,8 @@ internal fun AndroidReaderLayout(
     canPrevious: Boolean = pageIndex > 0,
     canNext: Boolean = pageIndex < pages.lastIndex,
     onSelectChapterOrd: ((Int) -> Unit)? = null,
+    chapterPages: ReaderChapterPagePosition? = null,
+    onSeekChapterPage: ((Int) -> Unit)? = null,
 ) {
     val typography = AndroidReaderTypography
     val systemBarInsets = rememberSystemBarInsets()
@@ -745,10 +748,12 @@ internal fun AndroidReaderLayout(
             AndroidReaderTopBar(book = book, onBack = onBack)
             AndroidReaderBottomPanel(
                 progress = progress,
+                chapterPages = chapterPages,
                 canPrevious = canPrevious,
                 canNext = canNext,
                 onPrevious = onPrevious,
                 onNext = onNext,
+                onSeekChapterPage = onSeekChapterPage,
                 onOpenChapterList = { chapterDrawerVisible = true },
             )
         }
@@ -799,10 +804,12 @@ private fun AndroidReaderTopBar(book: BookshelfBook, onBack: () -> Unit) {
 @Composable
 private fun BoxScope.AndroidReaderBottomPanel(
     progress: Double,
+    chapterPages: ReaderChapterPagePosition?,
     canPrevious: Boolean,
     canNext: Boolean,
     onPrevious: () -> Unit,
     onNext: () -> Unit,
+    onSeekChapterPage: ((Int) -> Unit)?,
     onOpenChapterList: () -> Unit,
 ) {
     val bottomInset = rememberSystemBarInsets().bottom
@@ -840,9 +847,10 @@ private fun BoxScope.AndroidReaderBottomPanel(
                     )
                 }
             }
-            LinearProgressIndicator(
-                progress = { progress.toFloat().coerceIn(0f, 1f) },
-                modifier = Modifier.fillMaxWidth(),
+            ChapterPageSlider(
+                chapterPages = chapterPages,
+                bookProgress = progress,
+                onSeekChapterPage = onSeekChapterPage,
             )
             Row(
                 modifier = Modifier.fillMaxWidth(),
@@ -853,6 +861,60 @@ private fun BoxScope.AndroidReaderBottomPanel(
                 ReaderPanelButton(label = ToreadStrings.NightMode, symbol = ToreadSymbols.DarkMode)
                 ReaderPanelButton(label = ToreadStrings.ReaderSettings, symbol = ToreadSymbols.Settings)
             }
+        }
+    }
+}
+
+/**
+ * Chapter progress for the reading panel: a label with the visible page inside its chapter and a
+ * draggable slider that only commits on release, so dragging never restarts pagination per frame.
+ *
+ * Falls back to the book-wide progress bar while the chapter page count is still being measured.
+ */
+@Composable
+private fun ChapterPageSlider(
+    chapterPages: ReaderChapterPagePosition?,
+    bookProgress: Double,
+    onSeekChapterPage: ((Int) -> Unit)?,
+) {
+    if (chapterPages == null || onSeekChapterPage == null) {
+        LinearProgressIndicator(
+            progress = { bookProgress.toFloat().coerceIn(0f, 1f) },
+            modifier = Modifier.fillMaxWidth(),
+        )
+        return
+    }
+
+    var draggedPage by remember(chapterPages) { mutableStateOf<Int?>(null) }
+    val shownPage = draggedPage ?: chapterPages.pageNumber
+
+    Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+        Text(
+            text = ToreadStrings.chapterPageProgress(shownPage, chapterPages.pageCount),
+            style = MaterialTheme.typography.labelMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        if (chapterPages.pageCount <= 1) {
+            LinearProgressIndicator(
+                progress = { 1f },
+                modifier = Modifier.fillMaxWidth(),
+            )
+        } else {
+            Slider(
+                value = shownPage.toFloat(),
+                onValueChange = { value ->
+                    draggedPage = value.roundToInt().coerceIn(1, chapterPages.pageCount)
+                },
+                valueRange = 1f..chapterPages.pageCount.toFloat(),
+                onValueChangeFinished = {
+                    val target = draggedPage
+                    draggedPage = null
+                    if (target != null && target != chapterPages.pageNumber) {
+                        onSeekChapterPage(target)
+                    }
+                },
+                modifier = Modifier.fillMaxWidth(),
+            )
         }
     }
 }

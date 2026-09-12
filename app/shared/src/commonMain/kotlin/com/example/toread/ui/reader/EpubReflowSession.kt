@@ -61,6 +61,8 @@ internal class EpubReflowSession(
     private var publicationEndReached = false
     private var prefetchedChapterOrd: Int? = null
     private var prefetchedChapterFrames: List<EpubPageFrame> = emptyList()
+    private var chapterPageLocatorCacheKey: Pair<Int, ReaderPaginationSpec>? = null
+    private var chapterPageLocators: List<ReaderTextLocator> = emptyList()
 
     var state: EpubReflowState = EpubReflowState(chapters = publication.chapters)
         private set
@@ -210,6 +212,63 @@ internal class EpubReflowSession(
     ): EpubReflowState {
         val anchor = mutex.withLock { currentLocator() }
         return open(anchor, spec, visiblePageCount)
+    }
+
+    /**
+     * Chapter-relative position of the visible page.
+     *
+     * The EPUB window only holds a few pages, so the chapter's page count is measured on demand by
+     * paginating that one chapter. The measurement keeps only the pages' start locators and is reused
+     * until the visible chapter or the pagination spec changes, so no chapter page table is retained
+     * and the bounded reflow window is unaffected.
+     */
+    suspend fun chapterPagePosition(): ReaderChapterPagePosition? = mutex.withLock {
+        val currentSpec = spec ?: return@withLock null
+        val page = frames.getOrNull(activeIndex)?.page ?: return@withLock null
+        val locators = chapterPageStartLocators(page.chapterOrd, currentSpec) ?: return@withLock null
+        if (locators.isEmpty()) return@withLock null
+        val index = locators.indexOfFirst { it.logicalCompare(page.startLocator) >= 0 }
+        val pageNumber = if (index >= 0) index + 1 else locators.size
+        ReaderChapterPagePosition(
+            pageNumber = pageNumber.coerceIn(1, locators.size),
+            pageCount = locators.size,
+        )
+    }
+
+    /** Jumps to the [pageNumber]-th page (one-based) of the chapter that is currently visible. */
+    suspend fun jumpToChapterPage(pageNumber: Int): EpubReflowState {
+        val locator = mutex.withLock { locatorForChapterPage(pageNumber) } ?: return state
+        val currentSpec = mutex.withLock { spec } ?: return state
+        val slots = mutex.withLock { visiblePageCount }
+        return open(locator, currentSpec, slots)
+    }
+
+    private suspend fun locatorForChapterPage(pageNumber: Int): EpubLocator? {
+        val currentSpec = spec ?: return null
+        val page = frames.getOrNull(activeIndex)?.page ?: return null
+        val locators = chapterPageStartLocators(page.chapterOrd, currentSpec) ?: return null
+        val target = locators.getOrNull(pageNumber - 1) ?: return null
+        val chapterProgress = chapterCache[page.chapterOrd]?.chapterProgress(target) ?: 0.0
+        return publication.toEpubLocator(target, chapterProgress)
+    }
+
+    private suspend fun chapterPageStartLocators(
+        chapterOrd: Int,
+        currentSpec: ReaderPaginationSpec,
+    ): List<ReaderTextLocator>? {
+        val cacheKey = chapterOrd to currentSpec
+        if (chapterPageLocatorCacheKey == cacheKey) return chapterPageLocators
+        val document = loadChapter(chapterOrd) ?: return null
+        val start = document.epubChapterStartLocator() ?: return null
+        val batch = document.paginateEpubForward(
+            spec = currentSpec,
+            startLocator = start,
+            maxPages = EpubChapterPageCountLimit,
+        )
+        val locators = batch.pages.map { it.startLocator }
+        chapterPageLocatorCacheKey = cacheKey
+        chapterPageLocators = locators
+        return locators
     }
 
     suspend fun preloadFollowingChapter(): EpubReflowState = mutex.withLock {
@@ -619,6 +678,9 @@ private fun EpubPublicationIndex.nextChapter(chapterOrd: Int): EpubChapterMetada
 }
 
 private const val ReaderLogArea = "reader"
+
+/** Guard for the on-demand chapter page count; a larger chapter simply reports this many pages. */
+private const val EpubChapterPageCountLimit = 2_000
 
 private fun ReaderDocument.resolveOpeningCursor(locator: EpubLocator?): ReaderTextLocator? {
     val start = epubChapterStartLocator() ?: return null

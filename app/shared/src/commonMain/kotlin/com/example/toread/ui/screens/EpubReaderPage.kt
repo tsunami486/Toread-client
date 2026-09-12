@@ -44,6 +44,7 @@ import com.example.toread.ui.reader.DesktopReaderLayout
 import com.example.toread.ui.reader.EpubReflowSession
 import com.example.toread.ui.reader.EpubReflowState
 import com.example.toread.ui.reader.ReaderChapterEntry
+import com.example.toread.ui.reader.ReaderChapterPagePosition
 import com.example.toread.ui.reader.ReaderMessage
 import com.example.toread.ui.reader.ReaderProgressRemoteSyncPolicy
 import com.example.toread.ui.reader.rememberReaderPaginationSpec
@@ -94,6 +95,7 @@ internal fun EpubReaderPage(
     var desktopDoublePageEnabled by remember(book.bookHash) { mutableStateOf(true) }
     var desktopNightModeEnabled by remember(book.bookHash) { mutableStateOf(true) }
     var desktopReaderFocusReady by remember(book.bookHash) { mutableStateOf(false) }
+    var chapterPages by remember(book.bookHash) { mutableStateOf<ReaderChapterPagePosition?>(null) }
 
     val session = remember(book.bookHash, publication, readerContentLoader) {
         publication?.let { index ->
@@ -267,6 +269,18 @@ internal fun EpubReaderPage(
                     }
                 }
 
+                // The chapter page count needs the whole chapter paginated once, so it is measured
+                // only while the reading panel is visible and reused until the chapter or spec changes.
+                LaunchedEffect(currentSession, controlsVisible, state.currentChapterOrd, state.generation) {
+                    if (!controlsVisible) {
+                        chapterPages = null
+                        return@LaunchedEffect
+                    }
+                    chapterPages = withContext(Dispatchers.Default) {
+                        currentSession.chapterPagePosition()
+                    }
+                }
+
                 fun navigate(
                     action: suspend EpubReflowSession.() -> EpubReflowState,
                 ) {
@@ -399,6 +413,10 @@ internal fun EpubReaderPage(
                             canPrevious = state.canPrevious,
                             canNext = state.canNext,
                             onSelectChapterOrd = ::jumpToChapter,
+                            chapterPages = chapterPages,
+                            onSeekChapterPage = { chapterPage ->
+                                navigate { jumpToChapterPage(chapterPage) }
+                            },
                         )
                     }
                 }

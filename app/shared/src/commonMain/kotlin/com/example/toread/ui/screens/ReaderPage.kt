@@ -63,6 +63,8 @@ import com.example.toread.ui.reader.paginateForReader
 import com.example.toread.ui.reader.rememberReaderPaginationSpec
 import com.example.toread.ui.reader.saveReaderProgress
 import com.example.toread.ui.reader.toPageIndex
+import com.example.toread.ui.reader.chapterPagePosition
+import com.example.toread.ui.reader.pageIndexForChapterPage
 import com.example.toread.ui.text.ToreadStrings
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
@@ -554,6 +556,11 @@ internal fun ReaderPage(
                                 } else {
                                     SystemBarsController.hideSystemBars()
                                 }
+                            },
+                            chapterPages = chapterPagePosition(pages, currentPageIndex),
+                            onSeekChapterPage = { chapterPage ->
+                                pageIndexForChapterPage(pages, currentPageIndex, chapterPage)
+                                    ?.let(::goToPage)
                             },
                         )
                     }

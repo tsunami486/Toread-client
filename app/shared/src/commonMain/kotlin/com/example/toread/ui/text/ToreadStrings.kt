@@ -258,6 +258,7 @@ object ToreadStrings {
     fun openBookFailed(reason: String?): String = failedWithReason("打开失败", reason)
     fun readChapterSummary(read: Int, total: Int): String = "已读 $read / 共 $total 章"
     fun chapterPage(index: Int): String = "第 ${index + 1} 页"
+    fun chapterPageProgress(pageNumber: Int, pageCount: Int): String = "本章 $pageNumber / $pageCount 页"
     fun pagePosition(index: Int, total: Int): String = "${index + 1} / $total"
     fun pdfPageRange(pageIndices: List<Int>, total: Int): String {
         val first = pageIndices.minOrNull() ?: 0
