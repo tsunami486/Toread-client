@@ -693,7 +693,6 @@ internal fun AndroidReaderLayout(
     canPrevious: Boolean = pageIndex > 0,
     canNext: Boolean = pageIndex < pages.lastIndex,
     onSelectChapterOrd: ((Int) -> Unit)? = null,
-    pageIdentity: Any = pageIndex,
 ) {
     val typography = AndroidReaderTypography
     val systemBarInsets = rememberSystemBarInsets()
@@ -716,7 +715,6 @@ internal fun AndroidReaderLayout(
                 previous = pages.getOrNull(pageIndex - 1),
                 next = pages.getOrNull(pageIndex + 1),
             ),
-            pageIdentity = pageIdentity,
             canPrevious = canPrevious,
             canNext = canNext,
             onPrevious = onPrevious,
