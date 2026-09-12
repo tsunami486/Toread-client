@@ -1,8 +1,8 @@
 package com.example.toread.ui.reader
 
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
-import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.Orientation
 import androidx.compose.foundation.gestures.draggable
@@ -61,6 +61,8 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clipToBounds
+import androidx.compose.ui.geometry.CornerRadius
+import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.vector.ImageVector
@@ -83,6 +85,7 @@ import com.example.toread.ui.text.ToreadStrings
 import com.example.toread.ui.theme.ToreadTheme
 import com.example.toread.ui.theme.toreadColors
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.filterNotNull
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.withContext
@@ -759,6 +762,7 @@ internal fun AndroidReaderLayout(
                 onPrevious = onPrevious,
                 onNext = onNext,
                 onSeekChapterPage = onSeekChapterPage,
+                currentChapterOrd = displayedCurrentChapterOrd,
                 nightMode = nightMode,
                 onToggleNightMode = onToggleNightMode,
                 onOpenChapterList = { chapterDrawerVisible = true },
@@ -821,6 +825,7 @@ private fun BoxScope.AndroidReaderBottomPanel(
     onPrevious: () -> Unit,
     onNext: () -> Unit,
     onSeekChapterPage: ((Int) -> Unit)?,
+    currentChapterOrd: Int,
     nightMode: Boolean,
     onToggleNightMode: (() -> Unit)?,
     onOpenChapterList: () -> Unit,
@@ -828,8 +833,27 @@ private fun BoxScope.AndroidReaderBottomPanel(
     val bottomInset = rememberSystemBarInsets().bottom
     // The panel follows the reader's own day/night switch instead of the app theme, so it keeps
     // matching the page surface while the reader is in night mode.
-    var draggedPage by remember(chapterPages) { mutableStateOf<Int?>(null) }
-    val shownPage = draggedPage ?: chapterPages?.pageNumber
+    var draggedPage by remember { mutableStateOf<Int?>(null) }
+    // The reader publishes a seeked page asynchronously, so the panel keeps showing the released page
+    // until the reader reports it. Dropping it on release would flash the thumb back to the page the
+    // reader still displays and only then jump to the target.
+    var pendingSeek by remember { mutableStateOf<ChapterPageSeek?>(null) }
+    val shownPage = chapterSliderPage(
+        draggedPage = draggedPage,
+        pendingSeek = pendingSeek,
+        chapterPages = chapterPages,
+    )
+
+    LaunchedEffect(pendingSeek, chapterPages, currentChapterOrd) {
+        val seek = pendingSeek ?: return@LaunchedEffect
+        if (chapterPageSeekSettled(seek, currentChapterOrd, chapterPages)) pendingSeek = null
+    }
+    LaunchedEffect(pendingSeek) {
+        val seek = pendingSeek ?: return@LaunchedEffect
+        delay(ReaderChapterSeekLatchMillis)
+        // The reader never published the requested page, so follow it again instead of freezing.
+        if (pendingSeek == seek) pendingSeek = null
+    }
 
     ToreadTheme(useDynamicColor = false, darkTheme = nightMode) {
         Card(
@@ -874,10 +898,14 @@ private fun BoxScope.AndroidReaderBottomPanel(
                 }
                 ChapterPageSlider(
                     chapterPages = chapterPages,
-                    draggedPage = draggedPage,
+                    shownPage = shownPage,
                     bookProgress = progress,
                     onDragPage = { draggedPage = it },
-                    onSeekChapterPage = onSeekChapterPage,
+                    onSeekChapterPage = { target ->
+                        // Hold the released page until the reader publishes it, then follow the reader.
+                        pendingSeek = ChapterPageSeek(chapterOrd = currentChapterOrd, target = target)
+                        onSeekChapterPage?.invoke(target)
+                    },
                 )
                 Row(
                     modifier = Modifier.fillMaxWidth(),
@@ -898,28 +926,28 @@ private fun BoxScope.AndroidReaderBottomPanel(
 }
 
 /**
- * Draggable slider whose thumb is a plain white circle instead of the Material bar, and which only
- * commits on release, so dragging never restarts pagination per frame.
+ * Draggable chapter-page slider drawn as one capsule: the track and the plain white circular thumb
+ * share a single height, so the part the reader has already passed runs straight into the thumb
+ * instead of stopping beside it. The seek is committed on release only, so dragging never restarts
+ * pagination per frame.
  *
  * Falls back to the book-wide progress bar while the chapter page count is still being measured.
  */
 @Composable
 private fun ChapterPageSlider(
     chapterPages: ReaderChapterPagePosition?,
-    draggedPage: Int?,
+    shownPage: Int?,
     bookProgress: Double,
     onDragPage: (Int?) -> Unit,
     onSeekChapterPage: ((Int) -> Unit)?,
 ) {
-    if (chapterPages == null || onSeekChapterPage == null) {
+    if (chapterPages == null || shownPage == null || onSeekChapterPage == null) {
         LinearProgressIndicator(
             progress = { bookProgress.toFloat().coerceIn(0f, 1f) },
             modifier = Modifier.fillMaxWidth(),
         )
         return
     }
-
-    val shownPage = draggedPage ?: chapterPages.pageNumber
 
     if (chapterPages.pageCount <= 1) {
         LinearProgressIndicator(
@@ -929,6 +957,9 @@ private fun ChapterPageSlider(
         return
     }
 
+    val activeTrackColor = MaterialTheme.colorScheme.primary
+    val inactiveTrackColor = MaterialTheme.colorScheme.primary.copy(alpha = 0.24f)
+
     Slider(
         value = shownPage.toFloat(),
         onValueChange = { value ->
@@ -936,23 +967,43 @@ private fun ChapterPageSlider(
         },
         valueRange = 1f..chapterPages.pageCount.toFloat(),
         onValueChangeFinished = {
-            val target = draggedPage
             onDragPage(null)
-            if (target != null && target != chapterPages.pageNumber) {
-                onSeekChapterPage(target)
+            if (shownPage != chapterPages.pageNumber) {
+                onSeekChapterPage(shownPage)
             }
         },
         thumb = {
+            // No outline: the thumb is the rounded cap of the track, not a separate handle.
             Box(
                 modifier = Modifier
                     .size(ReaderSliderThumbSize)
-                    .background(Color.White, CircleShape)
-                    .border(
-                        width = 1.dp,
-                        color = MaterialTheme.colorScheme.outlineVariant,
-                        shape = CircleShape,
-                    ),
+                    .background(Color.White, CircleShape),
             )
+        },
+        track = { sliderState ->
+            val range = sliderState.valueRange
+            val fraction = (
+                (sliderState.value - range.start) / (range.endInclusive - range.start)
+                ).coerceIn(0f, 1f)
+            Canvas(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(ReaderSliderThumbSize),
+            ) {
+                val radius = size.height / 2f
+                val capsule = CornerRadius(radius, radius)
+                drawRoundRect(color = inactiveTrackColor, cornerRadius = capsule)
+                // The thumb travels between the capsule's rounded ends, so the passed part has to end
+                // exactly at the thumb's centre; the seam stays hidden under the thumb.
+                drawRoundRect(
+                    color = activeTrackColor,
+                    size = Size(
+                        width = radius + (size.width - 2f * radius) * fraction,
+                        height = size.height,
+                    ),
+                    cornerRadius = capsule,
+                )
+            }
         },
         modifier = Modifier.fillMaxWidth(),
     )

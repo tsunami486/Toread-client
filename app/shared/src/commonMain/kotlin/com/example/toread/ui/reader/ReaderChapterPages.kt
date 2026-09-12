@@ -37,6 +37,37 @@ internal fun chapterPagePosition(
     )
 }
 
+/**
+ * A chapter-page seek the reading panel committed on release and the reader has not published yet.
+ *
+ * The panel keeps showing [target] until the reader reports it, because the seek is asynchronous:
+ * dropping the released value immediately would flash the thumb back to the page the reader still
+ * displays before the requested page arrives. [chapterOrd] scopes the wait to the chapter the seek was
+ * made in, so jumping to another chapter can never leave a stale target behind.
+ */
+internal data class ChapterPageSeek(
+    val chapterOrd: Int,
+    val target: Int,
+)
+
+/** True once the reader published the seek's target or left the chapter the seek was made in. */
+internal fun chapterPageSeekSettled(
+    seek: ChapterPageSeek,
+    currentChapterOrd: Int,
+    chapterPages: ReaderChapterPagePosition?,
+): Boolean = currentChapterOrd != seek.chapterOrd || chapterPages?.pageNumber == seek.target
+
+/**
+ * Page the reading panel shows: the thumb being dragged, the page a released seek is still waiting for,
+ * or the reader's own page. The middle term is what keeps a seek from flashing back to the page the
+ * reader has not left yet.
+ */
+internal fun chapterSliderPage(
+    draggedPage: Int?,
+    pendingSeek: ChapterPageSeek?,
+    chapterPages: ReaderChapterPagePosition?,
+): Int? = draggedPage ?: pendingSeek?.target ?: chapterPages?.pageNumber
+
 /** Global page index of the [chapterPageNumber]-th page of the chapter that contains [pageIndex]. */
 internal fun pageIndexForChapterPage(
     pages: List<ReaderPageSlice>,

@@ -9,8 +9,14 @@ import androidx.compose.ui.unit.sp
 internal val ReaderNightBackground = Color(0xFF0F1214)
 internal val ReaderNightText = Color(0xFFE4EAF0)
 
-/** The reading panel's slider thumb: a plain white circle instead of the Material bar. */
+/**
+ * The reading panel's slider thumb: a plain white circle instead of the Material bar. The track uses
+ * the same height, so the thumb and the passed part of the track read as one capsule.
+ */
 internal val ReaderSliderThumbSize = 18.dp
+
+/** How long the panel keeps a released chapter-page seek pinned before following the reader again. */
+internal const val ReaderChapterSeekLatchMillis = 2_000L
 
 internal const val ASeriesPaperAspectRatio = 0.7071f
 internal const val DesktopSpreadAspectRatio = ASeriesPaperAspectRatio * 2f

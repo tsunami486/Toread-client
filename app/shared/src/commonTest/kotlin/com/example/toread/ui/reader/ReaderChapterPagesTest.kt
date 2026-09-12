@@ -51,6 +51,35 @@ class ReaderChapterPagesTest {
         assertNull(pageIndexForChapterPage(pages, pageIndex = 9, chapterPageNumber = 1))
     }
 
+    @Test
+    fun aReleasedSeekIsSettledOnlyWhenTheReaderPublishesIt() {
+        val seek = ChapterPageSeek(chapterOrd = 4, target = 12)
+
+        // Still on the page the reader showed when the seek was released.
+        assertEquals(false, chapterPageSeekSettled(seek, 4, ReaderChapterPagePosition(5, 31)))
+        // The reader published the requested page.
+        assertEquals(true, chapterPageSeekSettled(seek, 4, ReaderChapterPagePosition(12, 31)))
+        // Another page of the same chapter is not the requested one.
+        assertEquals(false, chapterPageSeekSettled(seek, 4, ReaderChapterPagePosition(11, 31)))
+        // The chapter changed, so the pending target belongs to a chapter the reader has left.
+        assertEquals(true, chapterPageSeekSettled(seek, 5, ReaderChapterPagePosition(12, 31)))
+        // No measurement yet: keep waiting instead of flashing back.
+        assertEquals(false, chapterPageSeekSettled(seek, 4, null))
+    }
+
+    @Test
+    fun aReleasedSeekKeepsShowingTheRequestedPageUntilTheReaderPublishesIt() {
+        val hostPage = ReaderChapterPagePosition(5, 31)
+        val seek = ChapterPageSeek(chapterOrd = 4, target = 12)
+
+        // Following the reader, dragging, released while the reader is still on the old page, and
+        // finally the reader's own page once it arrives.
+        assertEquals(5, chapterSliderPage(null, null, hostPage))
+        assertEquals(12, chapterSliderPage(12, null, hostPage))
+        assertEquals(12, chapterSliderPage(null, seek, hostPage))
+        assertEquals(12, chapterSliderPage(null, seek, ReaderChapterPagePosition(12, 31)))
+    }
+
     private fun page(chapterOrd: Int): ReaderPageSlice =
         ReaderPageSlice(
             chapterTitle = "第 ${chapterOrd + 1} 章",
