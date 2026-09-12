@@ -23,6 +23,7 @@ import androidx.compose.ui.input.pointer.util.VelocityTracker
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
+import com.example.toread.logging.ToreadClientLog
 import kotlin.math.abs
 import kotlin.math.roundToInt
 import kotlinx.coroutines.Job
@@ -137,7 +138,7 @@ internal object ReflowPagerConfig {
     const val CommitAnimationMillis = 220
 
     /** A tap has no drag momentum, so it slides the whole page in one short, even step. */
-    const val TapTurnAnimationMillis = 50
+    const val TapTurnAnimationMillis = 200
 
     /** Spring-back for a rejected or unavailable turn. */
     const val CancelAnimationMillis = 160
@@ -277,6 +278,32 @@ internal fun AndroidReflowPager(
             }
         }
 
+        /**
+         * A turn may only start while the host still shows the page this pager draws.
+         *
+         * [ReflowFlipState.isBusy] covers the whole turn, including the wait for the host to publish
+         * the new page, so every gesture that arrives while the displayed page is ahead of the host
+         * index is rejected instead of computing a target from that stale index.
+         */
+        fun canStartTurn(gesture: String): Boolean {
+            if (!flipState.isBusy) return true
+            ToreadClientLog.info(
+                FlipLogArea,
+                "reader.flip_blocked",
+                "gesture" to gesture,
+                "direction" to flipState.direction?.logName(),
+                "isAnimating" to flipState.isAnimating,
+                "isDragging" to flipState.isDragging,
+            )
+            return false
+        }
+
+        /** Waits (bounded) for the host to publish a page other than the one a turn started from. */
+        suspend fun awaitHostPageChange(from: ReaderPageSlice?): Boolean =
+            withTimeoutOrNull(ReflowPagerConfig.PageChangeTimeoutMillis) {
+                snapshotFlow { latestPages.current }.first { it !== from }
+            } != null
+
         fun settleBack() {
             animationJob?.cancel()
             animationJob = scope.launch {
@@ -285,20 +312,37 @@ internal fun AndroidReflowPager(
         }
 
         fun runTurn(direction: ReflowFlipDirection, commitMillis: Int) {
-            if (flipState.isBusy) return
+            if (!canStartTurn(gesture = "turn")) return
             val target = when (direction) {
                 ReflowFlipDirection.Forward -> latestPages.next
                 ReflowFlipDirection.Backward -> latestPages.previous
             }
             val hostSliceAtStart = latestPages.current
+            ToreadClientLog.info(
+                FlipLogArea,
+                "reader.flip_start",
+                "direction" to direction.logName(),
+                "hasPreview" to (target != null),
+                "commitMillis" to commitMillis,
+            )
             flipState = flipState.beginTurn(direction = direction, target = target)
             animationJob?.cancel()
             animationJob = scope.launch {
                 if (target == null) {
                     // Sliding without a preview would expose an empty half: the host turns the page
-                    // right away and the current page settles back.
+                    // right away and the current page settles back. Input stays blocked until the host
+                    // publishes, otherwise a second gesture would compute its target from the index
+                    // the host has not advanced past yet.
                     requestTurn(direction)
                     animateOffsetTo(0f, ReflowPagerConfig.CancelAnimationMillis)
+                    val published = awaitHostPageChange(hostSliceAtStart)
+                    ToreadClientLog.info(
+                        FlipLogArea,
+                        "reader.flip_settled",
+                        "direction" to direction.logName(),
+                        "outcome" to if (published) "host_published" else "host_timeout",
+                        "slid" to false,
+                    )
                     flipState = flipState.cancelTurn()
                     return@launch
                 }
@@ -308,9 +352,14 @@ internal fun AndroidReflowPager(
                 }
                 animateOffsetTo(targetOffset, commitMillis)
                 requestTurn(direction)
-                val published = withTimeoutOrNull(ReflowPagerConfig.PageChangeTimeoutMillis) {
-                    snapshotFlow { latestPages.current }.first { it !== hostSliceAtStart }
-                } != null
+                val published = awaitHostPageChange(hostSliceAtStart)
+                ToreadClientLog.info(
+                    FlipLogArea,
+                    "reader.flip_settled",
+                    "direction" to direction.logName(),
+                    "outcome" to if (published) "swapped" else "reverted",
+                    "slid" to true,
+                )
                 if (published) {
                     // The host already shows the pre-rendered page, so zeroing the offset here
                     // draws exactly the same pixels as the last animation frame.
@@ -340,7 +389,9 @@ internal fun AndroidReflowPager(
                             val velocityTracker = VelocityTracker()
                             detectDragGestures(
                                 onDragStart = {
-                                    blocked = flipState.isBusy
+                                    // Re-checked here as well as on release, so a gesture that starts
+                                    // during a turn never moves the page either.
+                                    blocked = !canStartTurn(gesture = "drag")
                                     if (!blocked) {
                                         animationJob?.cancel()
                                         totalX = 0f
@@ -430,15 +481,23 @@ internal fun AndroidReflowPager(
                             detectTapGestures { tapOffset ->
                                 val fraction = (tapOffset.x / pageWidthPx).coerceIn(0f, 1f)
                                 when (reflowTapAction(fraction)) {
-                                    ReflowTapAction.Previous -> runTurn(
-                                        direction = ReflowFlipDirection.Backward,
-                                        commitMillis = ReflowPagerConfig.TapTurnAnimationMillis,
-                                    )
+                                    ReflowTapAction.Previous -> {
+                                        if (canStartTurn(gesture = "tap")) {
+                                            runTurn(
+                                                direction = ReflowFlipDirection.Backward,
+                                                commitMillis = ReflowPagerConfig.TapTurnAnimationMillis,
+                                            )
+                                        }
+                                    }
 
-                                    ReflowTapAction.Next -> runTurn(
-                                        direction = ReflowFlipDirection.Forward,
-                                        commitMillis = ReflowPagerConfig.TapTurnAnimationMillis,
-                                    )
+                                    ReflowTapAction.Next -> {
+                                        if (canStartTurn(gesture = "tap")) {
+                                            runTurn(
+                                                direction = ReflowFlipDirection.Forward,
+                                                commitMillis = ReflowPagerConfig.TapTurnAnimationMillis,
+                                            )
+                                        }
+                                    }
 
                                     ReflowTapAction.ToggleControls -> latestOnTapCenter()
                                 }
@@ -492,3 +551,11 @@ private fun ReflowPagerSlot(
         content()
     }
 }
+
+private fun ReflowFlipDirection.logName(): String =
+    when (this) {
+        ReflowFlipDirection.Forward -> "forward"
+        ReflowFlipDirection.Backward -> "backward"
+    }
+
+private const val FlipLogArea = "reader"
