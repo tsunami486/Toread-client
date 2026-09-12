@@ -26,6 +26,7 @@ import androidx.compose.ui.unit.dp
 import com.example.toread.logging.ToreadClientLog
 import kotlin.math.abs
 import kotlin.math.roundToInt
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
@@ -74,6 +75,25 @@ internal data class ReflowDragBounds(
     val hasNextPreview: Boolean,
     val hasPreviousPreview: Boolean,
 )
+
+/**
+ * Horizontal tracking for one drag gesture.
+ *
+ * [trackedFromX] stays null while the accumulated movement is still vertical and is set once the
+ * movement becomes horizontally dominant; the effective drag is measured from that point. The
+ * decision is re-evaluated on every event, so a gesture that opens with a little vertical drift
+ * still drags the page instead of staying frozen for its whole length.
+ */
+internal data class ReflowDragTracking(
+    val trackedFromX: Float? = null,
+) {
+    val isTracking: Boolean get() = trackedFromX != null
+
+    fun update(totalX: Float, totalY: Float): ReflowDragTracking =
+        if (isTracking || abs(totalX) <= abs(totalY)) this else ReflowDragTracking(totalX)
+
+    fun effectiveDragXPx(totalX: Float): Float = trackedFromX?.let { totalX - it } ?: 0f
+}
 
 /**
  * Pager-owned flip state.
@@ -304,10 +324,31 @@ internal fun AndroidReflowPager(
                 snapshotFlow { latestPages.current }.first { it !== from }
             } != null
 
+        /** Spring-back for a rejected drag. A running turn owns the offset and settles itself. */
         fun settleBack() {
+            if (flipState.isBusy) return
             animationJob?.cancel()
             animationJob = scope.launch {
                 animateOffsetTo(0f, ReflowPagerConfig.CancelAnimationMillis)
+            }
+        }
+
+        /**
+         * Runs a turn and guarantees the busy flag is released.
+         *
+         * A cancelled turn (a competing gesture, composition disposal) must never leave input
+         * blocked, so the flag is cleared in `finally` whenever the body did not clear it already.
+         */
+        fun launchTurn(block: suspend CoroutineScope.() -> Unit) {
+            animationJob?.cancel()
+            animationJob = scope.launch {
+                try {
+                    block()
+                } finally {
+                    if (flipState.isAnimating) {
+                        flipState = flipState.cancelTurn()
+                    }
+                }
             }
         }
 
@@ -326,8 +367,7 @@ internal fun AndroidReflowPager(
                 "commitMillis" to commitMillis,
             )
             flipState = flipState.beginTurn(direction = direction, target = target)
-            animationJob?.cancel()
-            animationJob = scope.launch {
+            launchTurn {
                 if (target == null) {
                     // Sliding without a preview would expose an empty half: the host turns the page
                     // right away and the current page settles back. Input stays blocked until the host
@@ -344,7 +384,7 @@ internal fun AndroidReflowPager(
                         "slid" to false,
                     )
                     flipState = flipState.cancelTurn()
-                    return@launch
+                    return@launchTurn
                 }
                 val targetOffset = when (direction) {
                     ReflowFlipDirection.Forward -> -pageWidthPx
@@ -383,9 +423,7 @@ internal fun AndroidReflowPager(
                             var totalX = 0f
                             var totalY = 0f
                             var startOffsetPx = 0f
-                            var horizontalLocked = false
-                            var verticalLocked = false
-                            val touchSlop = viewConfiguration.touchSlop
+                            var tracking = ReflowDragTracking()
                             val velocityTracker = VelocityTracker()
                             detectDragGestures(
                                 onDragStart = {
@@ -397,8 +435,7 @@ internal fun AndroidReflowPager(
                                         totalX = 0f
                                         totalY = 0f
                                         startOffsetPx = flipState.offsetPx
-                                        horizontalLocked = false
-                                        verticalLocked = false
+                                        tracking = ReflowDragTracking()
                                         velocityTracker.resetTracking()
                                         flipState = flipState.startDrag()
                                     }
@@ -415,17 +452,32 @@ internal fun AndroidReflowPager(
                                     val velocity = velocityTracker.calculateVelocity().x
                                     velocityTracker.resetTracking()
                                     flipState = flipState.endDrag()
-                                    when (
-                                        reflowSwipeAction(
-                                            dragXPx = totalX,
-                                            dragYPx = totalY,
-                                            pageWidthPx = pageWidthPx,
-                                            velocityPxPerSecond = velocity,
-                                            minimumTurnDistancePx = minimumTurnDistancePx,
-                                            canPrevious = latestCanPrevious,
-                                            canNext = latestCanNext,
-                                        )
-                                    ) {
+                                    val dragX = tracking.effectiveDragXPx(totalX)
+                                    val action = reflowSwipeAction(
+                                        dragXPx = dragX,
+                                        // Tracking already decided the gesture is horizontal, so the
+                                        // vertical component must not veto it here.
+                                        dragYPx = 0f,
+                                        pageWidthPx = pageWidthPx,
+                                        velocityPxPerSecond = velocity,
+                                        minimumTurnDistancePx = minimumTurnDistancePx,
+                                        canPrevious = latestCanPrevious,
+                                        canNext = latestCanNext,
+                                    )
+                                    ToreadClientLog.info(
+                                        FlipLogArea,
+                                        "reader.flip_gesture",
+                                        "action" to action.logName(),
+                                        "dragX" to dragX.roundToInt(),
+                                        "dragY" to totalY.roundToInt(),
+                                        "velocity" to velocity.roundToInt(),
+                                        "tracked" to tracking.isTracking,
+                                        "canNext" to latestCanNext,
+                                        "canPrevious" to latestCanPrevious,
+                                        "hasNextPreview" to (latestPages.next != null),
+                                        "hasPreviousPreview" to (latestPages.previous != null),
+                                    )
+                                    when (action) {
                                         ReflowSwipeAction.Next ->
                                             runTurn(
                                                 direction = ReflowFlipDirection.Forward,
@@ -447,17 +499,16 @@ internal fun AndroidReflowPager(
                                     velocityTracker.addPosition(change.uptimeMillis, change.position)
                                     totalX += dragAmount.x
                                     totalY += dragAmount.y
-                                    if (!horizontalLocked && !verticalLocked) {
-                                        when {
-                                            abs(totalX) > abs(totalY) -> horizontalLocked = true
-                                            abs(totalY) > touchSlop -> verticalLocked = true
-                                        }
-                                    }
-                                    if (horizontalLocked) {
+                                    // Follow the finger once the movement is horizontally dominant,
+                                    // and re-evaluate on every event instead of latching an axis on
+                                    // the first one: a gesture that opens with a little vertical drift
+                                    // must still drag the page.
+                                    tracking = tracking.update(totalX = totalX, totalY = totalY)
+                                    if (tracking.isTracking) {
                                         flipState = flipState.dragTo(
                                             offsetPx = reflowDragOffsetPx(
                                                 startOffsetPx = startOffsetPx,
-                                                dragXPx = totalX,
+                                                dragXPx = tracking.effectiveDragXPx(totalX),
                                                 pageWidthPx = pageWidthPx,
                                                 bounds = ReflowDragBounds(
                                                     canTurnNext = latestCanNext,
@@ -556,6 +607,13 @@ private fun ReflowFlipDirection.logName(): String =
     when (this) {
         ReflowFlipDirection.Forward -> "forward"
         ReflowFlipDirection.Backward -> "backward"
+    }
+
+private fun ReflowSwipeAction.logName(): String =
+    when (this) {
+        ReflowSwipeAction.Next -> "next"
+        ReflowSwipeAction.Previous -> "previous"
+        ReflowSwipeAction.Cancel -> "cancel"
     }
 
 private const val FlipLogArea = "reader"

@@ -2,6 +2,7 @@ package com.example.toread.ui.reader
 
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 
 class ReflowSwipeActionTest {
@@ -110,6 +111,37 @@ class ReflowSwipeActionTest {
         assertEquals(ReflowTapAction.ToggleControls, reflowTapAction(0.66f))
         assertEquals(ReflowTapAction.Next, reflowTapAction(0.68f))
         assertEquals(ReflowTapAction.Next, reflowTapAction(1f))
+    }
+
+    @Test
+    fun aGestureThatOpensVerticallyStillTracksOnceItTurnsHorizontal() {
+        var tracking = ReflowDragTracking()
+
+        // Opening events drift downwards: the page must not move yet.
+        tracking = tracking.update(totalX = 3f, totalY = 12f)
+        assertFalse(tracking.isTracking)
+        assertEquals(0f, tracking.effectiveDragXPx(totalX = 3f))
+
+        // The gesture then travels left and starts tracking from exactly that point, so the page
+        // picks the finger up without jumping.
+        tracking = tracking.update(totalX = 120f, totalY = 14f)
+        assertTrue(tracking.isTracking)
+        assertEquals(0f, tracking.effectiveDragXPx(totalX = 120f))
+
+        // From there it follows the finger one to one, even while the finger drifts vertically.
+        tracking = tracking.update(totalX = 180f, totalY = 40f)
+        assertTrue(tracking.isTracking)
+        assertEquals(60f, tracking.effectiveDragXPx(totalX = 180f))
+    }
+
+    @Test
+    fun aPurelyVerticalGestureNeverTracks() {
+        var tracking = ReflowDragTracking()
+        tracking = tracking.update(totalX = 2f, totalY = 40f)
+        tracking = tracking.update(totalX = 4f, totalY = 90f)
+
+        assertFalse(tracking.isTracking)
+        assertEquals(0f, tracking.effectiveDragXPx(totalX = 4f))
     }
 
     private fun action(
