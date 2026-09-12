@@ -158,7 +158,7 @@ internal object ReflowPagerConfig {
     const val CommitAnimationMillis = 220
 
     /** A tap has no drag momentum, so it slides the whole page in one short, even step. */
-    const val TapTurnAnimationMillis = 200
+    const val TapTurnAnimationMillis = 150
 
     /** Spring-back for a rejected or unavailable turn. */
     const val CancelAnimationMillis = 160
