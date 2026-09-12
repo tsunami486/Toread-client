@@ -7,7 +7,6 @@ import androidx.compose.foundation.gestures.Orientation
 import androidx.compose.foundation.gestures.draggable
 import androidx.compose.foundation.gestures.rememberDraggableState
 import androidx.compose.foundation.gestures.scrollBy
-import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxScope
@@ -694,6 +693,7 @@ internal fun AndroidReaderLayout(
     canPrevious: Boolean = pageIndex > 0,
     canNext: Boolean = pageIndex < pages.lastIndex,
     onSelectChapterOrd: ((Int) -> Unit)? = null,
+    pageIdentity: Any = pageIndex,
 ) {
     val typography = AndroidReaderTypography
     val systemBarInsets = rememberSystemBarInsets()
@@ -701,9 +701,6 @@ internal fun AndroidReaderLayout(
     val bottomInset = systemBarInsets.bottom
     val readerTopPadding = 10.dp + topInset
     val readerBottomPadding = 10.dp + bottomInset
-    val leftTapSource = remember { MutableInteractionSource() }
-    val centerTapSource = remember { MutableInteractionSource() }
-    val rightTapSource = remember { MutableInteractionSource() }
     val derivedChapterEntries = remember(pages) { pages.readerChapterEntries() }
     val displayedChapterEntries = chapterEntries ?: derivedChapterEntries
     val displayedCurrentChapterOrd = currentChapterOrd
@@ -713,53 +710,36 @@ internal fun AndroidReaderLayout(
     var chapterDrawerVisible by remember { mutableStateOf(false) }
 
     Box(modifier = Modifier.fillMaxSize()) {
-        ReaderTextPage(
-            page = pages.getOrNull(pageIndex) ?: ReaderPageSlice(book.title, 0, 0),
-            sourceText = sourceText,
-            modifier = Modifier
-                .fillMaxSize()
-                .padding(
-                    start = 24.dp,
-                    top = readerTopPadding,
-                    end = 24.dp,
-                    bottom = readerBottomPadding,
+        AndroidReflowPager(
+            pages = ReflowPagerPages(
+                current = pages.getOrNull(pageIndex) ?: ReaderPageSlice(book.title, 0, 0),
+                previous = pages.getOrNull(pageIndex - 1),
+                next = pages.getOrNull(pageIndex + 1),
             ),
-            textColor = MaterialTheme.colorScheme.onBackground,
-            bodyFontSize = typography.bodyFontSize,
-            bodyLineHeight = typography.bodyLineHeight,
-            bodyLetterSpacing = typography.bodyLetterSpacing,
-        )
-
-        Row(modifier = Modifier.fillMaxSize()) {
-            Box(
+            pageIdentity = pageIdentity,
+            canPrevious = canPrevious,
+            canNext = canNext,
+            onPrevious = onPrevious,
+            onNext = onNext,
+            onTapCenter = onToggleControls,
+            enabled = !chapterDrawerVisible,
+            modifier = Modifier.fillMaxSize(),
+        ) { page ->
+            ReaderTextPage(
+                page = page,
+                sourceText = sourceText,
                 modifier = Modifier
-                    .weight(1f)
-                    .fillMaxHeight()
-                    .clickable(
-                        interactionSource = leftTapSource,
-                        indication = null,
-                        onClick = onPrevious,
+                    .fillMaxSize()
+                    .padding(
+                        start = 24.dp,
+                        top = readerTopPadding,
+                        end = 24.dp,
+                        bottom = readerBottomPadding,
                     ),
-            )
-            Box(
-                modifier = Modifier
-                    .weight(1f)
-                    .fillMaxHeight()
-                    .clickable(
-                        interactionSource = centerTapSource,
-                        indication = null,
-                        onClick = onToggleControls,
-                    ),
-            )
-            Box(
-                modifier = Modifier
-                    .weight(1f)
-                    .fillMaxHeight()
-                    .clickable(
-                        interactionSource = rightTapSource,
-                        indication = null,
-                        onClick = onNext,
-                    ),
+                textColor = MaterialTheme.colorScheme.onBackground,
+                bodyFontSize = typography.bodyFontSize,
+                bodyLineHeight = typography.bodyLineHeight,
+                bodyLetterSpacing = typography.bodyLetterSpacing,
             )
         }
 
