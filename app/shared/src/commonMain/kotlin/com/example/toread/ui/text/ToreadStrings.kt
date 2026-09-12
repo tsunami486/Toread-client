@@ -209,6 +209,8 @@ object ToreadStrings {
     const val IncreaseFontSize = "字号增大"
     const val NightMode = "夜间"
     const val DayMode = "日间"
+    const val PreviousChapter = "上一章"
+    const val NextChapter = "下一章"
     const val ReaderSettings = "设置"
     const val EmptyChapterList = "尚未识别到章节"
     const val ImageUnavailable = "图片无法显示"

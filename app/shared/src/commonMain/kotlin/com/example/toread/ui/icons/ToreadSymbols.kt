@@ -36,6 +36,8 @@ internal object ToreadSymbols {
     val KeyboardArrowLeft = Res.drawable.material_symbol_rounded_keyboard_arrow_left
     val KeyboardArrowRight = Res.drawable.material_symbol_rounded_keyboard_arrow_right
     val KeyboardArrowUp = Res.drawable.material_symbol_rounded_keyboard_arrow_up
+    val KeyboardDoubleArrowLeft = Res.drawable.material_symbol_rounded_keyboard_double_arrow_left
+    val KeyboardDoubleArrowRight = Res.drawable.material_symbol_rounded_keyboard_double_arrow_right
     val LightMode = Res.drawable.material_symbol_rounded_light_mode
     val Logout = Res.drawable.material_symbol_rounded_logout
     val Menu = Res.drawable.material_symbol_rounded_menu

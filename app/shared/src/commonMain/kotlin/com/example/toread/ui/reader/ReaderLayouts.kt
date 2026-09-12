@@ -717,6 +717,18 @@ internal fun AndroidReaderLayout(
         ?: pages.getOrNull(pageIndex)?.chapterOrd
         ?: displayedChapterEntries.lastOrNull { it.pageIndex <= pageIndex }?.chapterOrd
         ?: 0
+    // The panel steps chapters rather than pages: the slider already covers page seeking, and the
+    // chapter list is the same source the drawer uses, so both stay consistent.
+    val (previousChapterEntry, nextChapterEntry) = remember(
+        displayedChapterEntries,
+        displayedCurrentChapterOrd,
+    ) {
+        displayedChapterEntries.lastOrNull { it.chapterOrd < displayedCurrentChapterOrd } to
+            displayedChapterEntries.firstOrNull { it.chapterOrd > displayedCurrentChapterOrd }
+    }
+    val goToChapterEntry: (ReaderChapterEntry) -> Unit = { chapter ->
+        onSelectChapterOrd?.invoke(chapter.chapterOrd) ?: onGoToPage(chapter.pageIndex)
+    }
     var chapterDrawerVisible by remember { mutableStateOf(false) }
 
     Box(modifier = Modifier.fillMaxSize()) {
@@ -757,10 +769,10 @@ internal fun AndroidReaderLayout(
             AndroidReaderBottomPanel(
                 progress = progress,
                 chapterPages = chapterPages,
-                canPrevious = canPrevious,
-                canNext = canNext,
-                onPrevious = onPrevious,
-                onNext = onNext,
+                canPreviousChapter = previousChapterEntry != null,
+                canNextChapter = nextChapterEntry != null,
+                onPreviousChapter = { previousChapterEntry?.let(goToChapterEntry) },
+                onNextChapter = { nextChapterEntry?.let(goToChapterEntry) },
                 onSeekChapterPage = onSeekChapterPage,
                 currentChapterOrd = displayedCurrentChapterOrd,
                 nightMode = nightMode,
@@ -820,10 +832,10 @@ private fun AndroidReaderTopBar(book: BookshelfBook, onBack: () -> Unit) {
 private fun BoxScope.AndroidReaderBottomPanel(
     progress: Double,
     chapterPages: ReaderChapterPagePosition?,
-    canPrevious: Boolean,
-    canNext: Boolean,
-    onPrevious: () -> Unit,
-    onNext: () -> Unit,
+    canPreviousChapter: Boolean,
+    canNextChapter: Boolean,
+    onPreviousChapter: () -> Unit,
+    onNextChapter: () -> Unit,
     onSeekChapterPage: ((Int) -> Unit)?,
     currentChapterOrd: Int,
     nightMode: Boolean,
@@ -871,14 +883,12 @@ private fun BoxScope.AndroidReaderBottomPanel(
                     horizontalArrangement = Arrangement.SpaceBetween,
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
-                    TextButton(onClick = onPrevious, enabled = canPrevious) {
-                        ToreadSymbolIcon(
-                            symbol = ToreadSymbols.KeyboardArrowLeft,
-                            contentDescription = null,
-                            autoMirror = true,
-                        )
-                        Text(ToreadStrings.PreviousPage)
-                    }
+                    ReaderChapterStepButton(
+                        description = ToreadStrings.PreviousChapter,
+                        symbol = ToreadSymbols.KeyboardDoubleArrowLeft,
+                        enabled = canPreviousChapter,
+                        onClick = onPreviousChapter,
+                    )
                     Text(
                         text = if (chapterPages != null && shownPage != null) {
                             ToreadStrings.chapterPageProgress(shownPage, chapterPages.pageCount)
@@ -887,14 +897,12 @@ private fun BoxScope.AndroidReaderBottomPanel(
                         },
                         style = MaterialTheme.typography.labelLarge,
                     )
-                    TextButton(onClick = onNext, enabled = canNext) {
-                        Text(ToreadStrings.NextPage)
-                        ToreadSymbolIcon(
-                            symbol = ToreadSymbols.KeyboardArrowRight,
-                            contentDescription = null,
-                            autoMirror = true,
-                        )
-                    }
+                    ReaderChapterStepButton(
+                        description = ToreadStrings.NextChapter,
+                        symbol = ToreadSymbols.KeyboardDoubleArrowRight,
+                        enabled = canNextChapter,
+                        onClick = onNextChapter,
+                    )
                 }
                 ChapterPageSlider(
                     chapterPages = chapterPages,
@@ -922,6 +930,27 @@ private fun BoxScope.AndroidReaderBottomPanel(
                 }
             }
         }
+    }
+}
+
+/**
+ * Chapter step for the reading panel: icon only, so the panel row keeps exactly one text label (the
+ * chapter page position). The description stays for accessibility, and `IconButton` supplies the
+ * disabled tint while the book has no neighbouring chapter.
+ */
+@Composable
+private fun ReaderChapterStepButton(
+    description: String,
+    symbol: DrawableResource,
+    enabled: Boolean,
+    onClick: () -> Unit,
+) {
+    IconButton(onClick = onClick, enabled = enabled) {
+        ToreadSymbolIcon(
+            symbol = symbol,
+            contentDescription = description,
+            autoMirror = true,
+        )
     }
 }
 
