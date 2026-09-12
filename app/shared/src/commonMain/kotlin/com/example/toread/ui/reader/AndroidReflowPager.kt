@@ -10,8 +10,8 @@ import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.offset
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -48,6 +48,12 @@ internal enum class ReflowSwipeAction {
     Cancel,
 }
 
+internal enum class ReflowTapAction {
+    Previous,
+    ToggleControls,
+    Next,
+}
+
 internal data class ReflowPagerPages(
     val current: ReaderPageSlice?,
     val previous: ReaderPageSlice?,
@@ -73,7 +79,13 @@ internal object ReflowPagerConfig {
     const val EdgeResistance = 0.22f
     const val UnresolvedNeighbourResistance = 0.35f
 
+    /** A dragged turn slides the page under the finger and keeps its momentum. */
     const val CommitAnimationMillis = 220
+
+    /** A tap has no drag momentum, so it slides the whole page in one short, even step. */
+    const val TapTurnAnimationMillis = 50
+
+    /** Spring-back for a rejected or unavailable turn. */
     const val CancelAnimationMillis = 160
 
     /** How long a committed turn waits for the host to publish the new page before reverting. */
@@ -118,6 +130,14 @@ internal fun reflowSwipeAction(
     }
 }
 
+/** Tap zones keep the left/center/right thirds the reader had before it supported dragging. */
+internal fun reflowTapAction(horizontalFraction: Float): ReflowTapAction =
+    when {
+        horizontalFraction < ReflowPagerConfig.PreviousTapFraction -> ReflowTapAction.Previous
+        horizontalFraction > ReflowPagerConfig.NextTapFraction -> ReflowTapAction.Next
+        else -> ReflowTapAction.ToggleControls
+    }
+
 /**
  * Offset for the page under the finger.
  *
@@ -144,11 +164,11 @@ internal fun reflowDragOffsetPx(
 
 /**
  * Hosts one reflow page plus its neighbours, follows the finger horizontally, and turns the page
- * through [onPrevious]/[onNext] once the drag commits.
+ * through [onPrevious]/[onNext] once the drag or tap commits.
  *
- * [pageIdentity] identifies the visible page: when the host publishes a new one the pager drops the
- * transient offset without animating, so the incoming page lands exactly where the outgoing page was
- * dragged to.
+ * [pageIdentity] identifies the visible page. The pager state is keyed on it so a page turn drops the
+ * transient offset while composing the new page: the neighbour slots shift by one page, and an offset
+ * kept for even a single frame would reveal the page after next.
  */
 @Composable
 internal fun AndroidReflowPager(
@@ -171,211 +191,234 @@ internal fun AndroidReflowPager(
     val latestOnTapCenter by rememberUpdatedState(onTapCenter)
     val latestIdentity by rememberUpdatedState(pageIdentity)
 
-    val scope = rememberCoroutineScope()
-    val animatedOffset = remember { Animatable(0f) }
-    var dragOffsetPx by remember { mutableFloatStateOf(0f) }
-    var isDragging by remember { mutableStateOf(false) }
-    var settleJob by remember { mutableStateOf<Job?>(null) }
+    key(pageIdentity) {
+        val scope = rememberCoroutineScope()
+        val animatedOffset = remember { Animatable(0f) }
+        var dragOffsetPx by remember { mutableFloatStateOf(0f) }
+        var isDragging by remember { mutableStateOf(false) }
+        var settleJob by remember { mutableStateOf<Job?>(null) }
 
-    BoxWithConstraints(modifier = modifier) {
-        val density = LocalDensity.current
-        val pageWidthPx = with(density) { maxWidth.toPx() }.coerceAtLeast(1f)
-        val minimumTurnDistancePx = with(density) { ReflowPagerConfig.MinimumTurnDistance.toPx() }
-        val visibleOffsetProvider = { if (isDragging) dragOffsetPx else animatedOffset.value }
+        BoxWithConstraints(modifier = modifier) {
+            val density = LocalDensity.current
+            val pageWidthPx = with(density) { maxWidth.toPx() }.coerceAtLeast(1f)
+            val minimumTurnDistancePx =
+                with(density) { ReflowPagerConfig.MinimumTurnDistance.toPx() }
+            val visibleOffsetProvider = { if (isDragging) dragOffsetPx else animatedOffset.value }
 
-        LaunchedEffect(pageIdentity) {
-            settleJob?.cancel()
-            settleJob = null
-            isDragging = false
-            dragOffsetPx = 0f
-            animatedOffset.snapTo(0f)
-        }
+            suspend fun animateOffsetTo(target: Float, durationMillis: Int) =
+                animatedOffset.animateTo(
+                    targetValue = target,
+                    animationSpec = tween(
+                        durationMillis = durationMillis,
+                        easing = FastOutSlowInEasing,
+                    ),
+                )
 
-        suspend fun animateOffsetTo(target: Float, durationMillis: Int) =
-            animatedOffset.animateTo(
-                targetValue = target,
-                animationSpec = tween(durationMillis = durationMillis, easing = FastOutSlowInEasing),
-            )
-
-        fun requestTurn(action: ReflowSwipeAction) {
-            when (action) {
-                ReflowSwipeAction.Next -> latestOnNext()
-                ReflowSwipeAction.Previous -> latestOnPrevious()
-                ReflowSwipeAction.Cancel -> Unit
-            }
-        }
-
-        fun settle(action: ReflowSwipeAction) {
-            val startIdentity = latestIdentity
-            settleJob?.cancel()
-            settleJob = scope.launch {
-                try {
-                    animatedOffset.snapTo(dragOffsetPx)
-                    when (action) {
-                        ReflowSwipeAction.Cancel ->
-                            animateOffsetTo(0f, ReflowPagerConfig.CancelAnimationMillis)
-
-                        ReflowSwipeAction.Next,
-                        ReflowSwipeAction.Previous,
-                        -> {
-                            val hasNeighbourPreview = if (action == ReflowSwipeAction.Next) {
-                                latestPages.next != null
-                            } else {
-                                latestPages.previous != null
-                            }
-                            if (!hasNeighbourPreview) {
-                                // Sliding without a preview would expose an empty half, so the host
-                                // turns the page immediately and the current page springs back.
-                                requestTurn(action)
-                                animateOffsetTo(0f, ReflowPagerConfig.CancelAnimationMillis)
-                                return@launch
-                            }
-                            val target = if (action == ReflowSwipeAction.Next) {
-                                -pageWidthPx
-                            } else {
-                                pageWidthPx
-                            }
-                            animateOffsetTo(target, ReflowPagerConfig.CommitAnimationMillis)
-                            requestTurn(action)
-                            val published = withTimeoutOrNull(
-                                ReflowPagerConfig.PageChangeTimeoutMillis,
-                            ) {
-                                snapshotFlow { latestIdentity }.first { it != startIdentity }
-                            } != null
-                            if (!published) {
-                                animateOffsetTo(0f, ReflowPagerConfig.CancelAnimationMillis)
-                            }
-                        }
-                    }
-                } finally {
-                    withContext(NonCancellable) {
-                        if (!isDragging) {
-                            animatedOffset.snapTo(0f)
-                            dragOffsetPx = 0f
-                        }
-                    }
+            fun requestTurn(action: ReflowSwipeAction) {
+                when (action) {
+                    ReflowSwipeAction.Next -> latestOnNext()
+                    ReflowSwipeAction.Previous -> latestOnPrevious()
+                    ReflowSwipeAction.Cancel -> Unit
                 }
             }
-        }
 
-        Box(
-            modifier = Modifier
-                .fillMaxSize()
-                .then(
-                    if (!enabled) {
-                        Modifier
-                    } else {
-                        Modifier.pointerInput(pageWidthPx, minimumTurnDistancePx) {
-                            var totalX = 0f
-                            var totalY = 0f
-                            var startOffsetPx = 0f
-                            var horizontalLocked = false
-                            var verticalLocked = false
-                            val touchSlop = viewConfiguration.touchSlop
-                            val velocityTracker = VelocityTracker()
-                            detectDragGestures(
-                                onDragStart = {
-                                    settleJob?.cancel()
-                                    totalX = 0f
-                                    totalY = 0f
-                                    startOffsetPx = animatedOffset.value
-                                    dragOffsetPx = startOffsetPx
-                                    horizontalLocked = false
-                                    verticalLocked = false
-                                    velocityTracker.resetTracking()
-                                    isDragging = true
-                                },
-                                onDragCancel = {
-                                    velocityTracker.resetTracking()
-                                    isDragging = false
-                                    settle(ReflowSwipeAction.Cancel)
-                                },
-                                onDragEnd = {
-                                    isDragging = false
-                                    val velocity = velocityTracker.calculateVelocity().x
-                                    velocityTracker.resetTracking()
-                                    settle(
-                                        reflowSwipeAction(
-                                            dragXPx = totalX,
-                                            dragYPx = totalY,
-                                            pageWidthPx = pageWidthPx,
-                                            velocityPxPerSecond = velocity,
-                                            minimumTurnDistancePx = minimumTurnDistancePx,
-                                            canPrevious = latestCanPrevious,
-                                            canNext = latestCanNext,
-                                        ),
-                                    )
-                                },
-                                onDrag = { change, dragAmount ->
-                                    change.consume()
-                                    velocityTracker.addPosition(change.uptimeMillis, change.position)
-                                    totalX += dragAmount.x
-                                    totalY += dragAmount.y
-                                    if (!horizontalLocked && !verticalLocked) {
-                                        when {
-                                            abs(totalX) > abs(totalY) -> horizontalLocked = true
-                                            abs(totalY) > touchSlop -> verticalLocked = true
-                                        }
-                                    }
-                                    if (horizontalLocked) {
-                                        dragOffsetPx = reflowDragOffsetPx(
-                                            startOffsetPx = startOffsetPx,
-                                            dragXPx = totalX,
-                                            pageWidthPx = pageWidthPx,
-                                            bounds = ReflowDragBounds(
-                                                canTurnNext = latestCanNext,
-                                                canTurnPrevious = latestCanPrevious,
-                                                hasNextPreview = latestPages.next != null,
-                                                hasPreviousPreview = latestPages.previous != null,
-                                            ),
-                                        )
-                                    }
-                                },
-                            )
+            fun runTurn(
+                action: ReflowSwipeAction,
+                fromDragOffset: Boolean,
+                commitMillis: Int,
+            ) {
+                val startIdentity = latestIdentity
+                settleJob?.cancel()
+                settleJob = scope.launch {
+                    try {
+                        if (fromDragOffset) {
+                            animatedOffset.snapTo(dragOffsetPx)
                         }
-                    },
-                )
-                .then(
-                    if (!enabled) {
-                        Modifier
-                    } else {
-                        Modifier.pointerInput(pageWidthPx) {
-                            detectTapGestures { tapOffset ->
-                                val fraction = (tapOffset.x / pageWidthPx).coerceIn(0f, 1f)
-                                when {
-                                    fraction < ReflowPagerConfig.PreviousTapFraction ->
-                                        latestOnPrevious()
+                        when (action) {
+                            ReflowSwipeAction.Cancel ->
+                                animateOffsetTo(0f, ReflowPagerConfig.CancelAnimationMillis)
 
-                                    fraction > ReflowPagerConfig.NextTapFraction ->
-                                        latestOnNext()
-
-                                    else -> latestOnTapCenter()
+                            ReflowSwipeAction.Next,
+                            ReflowSwipeAction.Previous,
+                            -> {
+                                val hasNeighbourPreview = if (action == ReflowSwipeAction.Next) {
+                                    latestPages.next != null
+                                } else {
+                                    latestPages.previous != null
+                                }
+                                if (!hasNeighbourPreview) {
+                                    // Sliding without a preview would expose an empty half, so the
+                                    // host turns the page immediately and the page springs back.
+                                    requestTurn(action)
+                                    animateOffsetTo(0f, ReflowPagerConfig.CancelAnimationMillis)
+                                    return@launch
+                                }
+                                val target = if (action == ReflowSwipeAction.Next) {
+                                    -pageWidthPx
+                                } else {
+                                    pageWidthPx
+                                }
+                                animateOffsetTo(target, commitMillis)
+                                requestTurn(action)
+                                val published = withTimeoutOrNull(
+                                    ReflowPagerConfig.PageChangeTimeoutMillis,
+                                ) {
+                                    snapshotFlow { latestIdentity }.first { it != startIdentity }
+                                } != null
+                                if (!published) {
+                                    animateOffsetTo(0f, ReflowPagerConfig.CancelAnimationMillis)
                                 }
                             }
                         }
-                    },
-                ),
-        ) {
-            val previousPage = pages.previous
-            val nextPage = pages.next
-            val currentPage = pages.current
-            if (previousPage != null) {
-                ReflowPagerSlot(
-                    offsetProvider = { visibleOffsetProvider() - pageWidthPx },
-                ) {
-                    pageContent(previousPage)
+                    } finally {
+                        withContext(NonCancellable) {
+                            if (!isDragging) {
+                                animatedOffset.snapTo(0f)
+                                dragOffsetPx = 0f
+                            }
+                        }
+                    }
                 }
             }
-            if (nextPage != null) {
-                ReflowPagerSlot(
-                    offsetProvider = { visibleOffsetProvider() + pageWidthPx },
-                ) {
-                    pageContent(nextPage)
+
+            fun turnByTap(action: ReflowTapAction) {
+                when (action) {
+                    ReflowTapAction.Previous -> runTurn(
+                        action = ReflowSwipeAction.Previous,
+                        fromDragOffset = false,
+                        commitMillis = ReflowPagerConfig.TapTurnAnimationMillis,
+                    )
+
+                    ReflowTapAction.Next -> runTurn(
+                        action = ReflowSwipeAction.Next,
+                        fromDragOffset = false,
+                        commitMillis = ReflowPagerConfig.TapTurnAnimationMillis,
+                    )
+
+                    ReflowTapAction.ToggleControls -> latestOnTapCenter()
                 }
             }
-            if (currentPage != null) {
-                ReflowPagerSlot(offsetProvider = visibleOffsetProvider) {
-                    pageContent(currentPage)
+
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .then(
+                        if (!enabled) {
+                            Modifier
+                        } else {
+                            Modifier.pointerInput(pageWidthPx, minimumTurnDistancePx) {
+                                var totalX = 0f
+                                var totalY = 0f
+                                var startOffsetPx = 0f
+                                var horizontalLocked = false
+                                var verticalLocked = false
+                                val touchSlop = viewConfiguration.touchSlop
+                                val velocityTracker = VelocityTracker()
+                                detectDragGestures(
+                                    onDragStart = {
+                                        settleJob?.cancel()
+                                        totalX = 0f
+                                        totalY = 0f
+                                        startOffsetPx = animatedOffset.value
+                                        dragOffsetPx = startOffsetPx
+                                        horizontalLocked = false
+                                        verticalLocked = false
+                                        velocityTracker.resetTracking()
+                                        isDragging = true
+                                    },
+                                    onDragCancel = {
+                                        velocityTracker.resetTracking()
+                                        isDragging = false
+                                        runTurn(
+                                            action = ReflowSwipeAction.Cancel,
+                                            fromDragOffset = true,
+                                            commitMillis = ReflowPagerConfig.CommitAnimationMillis,
+                                        )
+                                    },
+                                    onDragEnd = {
+                                        isDragging = false
+                                        val velocity = velocityTracker.calculateVelocity().x
+                                        velocityTracker.resetTracking()
+                                        runTurn(
+                                            action = reflowSwipeAction(
+                                                dragXPx = totalX,
+                                                dragYPx = totalY,
+                                                pageWidthPx = pageWidthPx,
+                                                velocityPxPerSecond = velocity,
+                                                minimumTurnDistancePx = minimumTurnDistancePx,
+                                                canPrevious = latestCanPrevious,
+                                                canNext = latestCanNext,
+                                            ),
+                                            fromDragOffset = true,
+                                            commitMillis = ReflowPagerConfig.CommitAnimationMillis,
+                                        )
+                                    },
+                                    onDrag = { change, dragAmount ->
+                                        change.consume()
+                                        velocityTracker.addPosition(
+                                            change.uptimeMillis,
+                                            change.position,
+                                        )
+                                        totalX += dragAmount.x
+                                        totalY += dragAmount.y
+                                        if (!horizontalLocked && !verticalLocked) {
+                                            when {
+                                                abs(totalX) > abs(totalY) -> horizontalLocked = true
+                                                abs(totalY) > touchSlop -> verticalLocked = true
+                                            }
+                                        }
+                                        if (horizontalLocked) {
+                                            dragOffsetPx = reflowDragOffsetPx(
+                                                startOffsetPx = startOffsetPx,
+                                                dragXPx = totalX,
+                                                pageWidthPx = pageWidthPx,
+                                                bounds = ReflowDragBounds(
+                                                    canTurnNext = latestCanNext,
+                                                    canTurnPrevious = latestCanPrevious,
+                                                    hasNextPreview = latestPages.next != null,
+                                                    hasPreviousPreview = latestPages.previous != null,
+                                                ),
+                                            )
+                                        }
+                                    },
+                                )
+                            }
+                        },
+                    )
+                    .then(
+                        if (!enabled) {
+                            Modifier
+                        } else {
+                            Modifier.pointerInput(pageWidthPx) {
+                                detectTapGestures { tapOffset ->
+                                    val fraction = (tapOffset.x / pageWidthPx).coerceIn(0f, 1f)
+                                    turnByTap(reflowTapAction(fraction))
+                                }
+                            }
+                        },
+                    ),
+            ) {
+                val previousPage = pages.previous
+                val nextPage = pages.next
+                val currentPage = pages.current
+                if (previousPage != null) {
+                    ReflowPagerSlot(
+                        offsetProvider = { visibleOffsetProvider() - pageWidthPx },
+                    ) {
+                        pageContent(previousPage)
+                    }
+                }
+                if (nextPage != null) {
+                    ReflowPagerSlot(
+                        offsetProvider = { visibleOffsetProvider() + pageWidthPx },
+                    ) {
+                        pageContent(nextPage)
+                    }
+                }
+                if (currentPage != null) {
+                    ReflowPagerSlot(offsetProvider = visibleOffsetProvider) {
+                        pageContent(currentPage)
+                    }
                 }
             }
         }

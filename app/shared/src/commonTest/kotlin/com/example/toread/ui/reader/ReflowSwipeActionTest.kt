@@ -101,6 +101,17 @@ class ReflowSwipeActionTest {
         assertEquals(0f, reflowDragOffsetPx(0f, -300f, 0f, readyBounds))
     }
 
+    @Test
+    fun tapZonesKeepTheLeftCenterRightThirds() {
+        assertEquals(ReflowTapAction.Previous, reflowTapAction(0f))
+        assertEquals(ReflowTapAction.Previous, reflowTapAction(0.32f))
+        assertEquals(ReflowTapAction.ToggleControls, reflowTapAction(0.34f))
+        assertEquals(ReflowTapAction.ToggleControls, reflowTapAction(0.5f))
+        assertEquals(ReflowTapAction.ToggleControls, reflowTapAction(0.66f))
+        assertEquals(ReflowTapAction.Next, reflowTapAction(0.68f))
+        assertEquals(ReflowTapAction.Next, reflowTapAction(1f))
+    }
+
     private fun action(
         dragXPx: Float,
         dragYPx: Float = 0f,
