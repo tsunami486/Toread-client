@@ -29,6 +29,19 @@ class LocalSettingsRepositoryTest {
     }
 
     @Test
+    fun readerNightModeDefaultsOffAndRoundTrips() {
+        val repository = testRepository()
+
+        assertEquals(false, repository.readerNightModeEnabled())
+
+        repository.setReaderNightModeEnabled(true)
+        assertEquals(true, repository.readerNightModeEnabled())
+
+        repository.setReaderNightModeEnabled(false)
+        assertEquals(false, repository.readerNightModeEnabled())
+    }
+
+    @Test
     fun pdfPreferencesUseSafeDefaultsWhenNoSettingsExist() {
         val repository = testRepository()
 

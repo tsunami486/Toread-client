@@ -63,6 +63,7 @@ import com.example.toread.ui.reader.paginateForReader
 import com.example.toread.ui.reader.rememberReaderPaginationSpec
 import com.example.toread.ui.reader.saveReaderProgress
 import com.example.toread.ui.reader.toPageIndex
+import com.example.toread.ui.reader.ReaderNightBackground
 import com.example.toread.ui.reader.chapterPagePosition
 import com.example.toread.ui.reader.pageIndexForChapterPage
 import com.example.toread.ui.text.ToreadStrings
@@ -111,6 +112,7 @@ internal fun ReaderPage(
             remoteProgressSource = remoteProgressSource,
             progressSaveScope = progressSaveScope,
             readerContentLoader = readerContentLoader,
+            settingsRepository = settingsRepository,
             onProgressSyncFinished = onProgressSyncFinished,
             onBack = onBack,
         )
@@ -142,6 +144,9 @@ internal fun ReaderPage(
     var paginationComplete by remember(book?.bookHash) { mutableStateOf(false) }
     var desktopReaderFocusReady by remember(book?.bookHash) { mutableStateOf(false) }
     var hasUserNavigated by remember(book?.bookHash) { mutableStateOf(false) }
+    var nightMode by remember(book?.bookHash) {
+        mutableStateOf(settingsRepository?.readerNightModeEnabled() ?: false)
+    }
     var desktopDoublePageEnabled by remember(book?.bookHash) { mutableStateOf(true) }
     var desktopNightModeEnabled by remember(book?.bookHash) { mutableStateOf(true) }
     val focusRequester = remember { FocusRequester() }
@@ -253,7 +258,9 @@ internal fun ReaderPage(
         .fillMaxSize()
 
     Box(
-        modifier = readerModifier.background(MaterialTheme.colorScheme.background),
+        modifier = readerModifier.background(
+            if (nightMode) ReaderNightBackground else MaterialTheme.colorScheme.background,
+        ),
     ) {
         when {
             error != null -> ReaderMessage(message = error.orEmpty(), onBack = ::exitReaderWithoutProgress)
@@ -561,6 +568,11 @@ internal fun ReaderPage(
                             onSeekChapterPage = { chapterPage ->
                                 pageIndexForChapterPage(pages, currentPageIndex, chapterPage)
                                     ?.let(::goToPage)
+                            },
+                            nightMode = nightMode,
+                            onToggleNightMode = {
+                                nightMode = !nightMode
+                                settingsRepository?.setReaderNightModeEnabled(nightMode)
                             },
                         )
                     }

@@ -2,6 +2,7 @@ package com.example.toread.ui.reader
 
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.Orientation
 import androidx.compose.foundation.gestures.draggable
@@ -30,6 +31,7 @@ import androidx.compose.foundation.lazy.LazyListScope
 import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
@@ -78,6 +80,7 @@ import com.example.toread.ui.components.ScreenColumn
 import com.example.toread.ui.icons.ToreadSymbolIcon
 import com.example.toread.ui.icons.ToreadSymbols
 import com.example.toread.ui.text.ToreadStrings
+import com.example.toread.ui.theme.ToreadTheme
 import com.example.toread.ui.theme.toreadColors
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.filterNotNull
@@ -696,6 +699,8 @@ internal fun AndroidReaderLayout(
     onSelectChapterOrd: ((Int) -> Unit)? = null,
     chapterPages: ReaderChapterPagePosition? = null,
     onSeekChapterPage: ((Int) -> Unit)? = null,
+    nightMode: Boolean = false,
+    onToggleNightMode: (() -> Unit)? = null,
 ) {
     val typography = AndroidReaderTypography
     val systemBarInsets = rememberSystemBarInsets()
@@ -737,7 +742,7 @@ internal fun AndroidReaderLayout(
                         end = 24.dp,
                         bottom = readerBottomPadding,
                     ),
-                textColor = MaterialTheme.colorScheme.onBackground,
+                textColor = if (nightMode) ReaderNightText else MaterialTheme.colorScheme.onBackground,
                 bodyFontSize = typography.bodyFontSize,
                 bodyLineHeight = typography.bodyLineHeight,
                 bodyLetterSpacing = typography.bodyLetterSpacing,
@@ -754,20 +759,26 @@ internal fun AndroidReaderLayout(
                 onPrevious = onPrevious,
                 onNext = onNext,
                 onSeekChapterPage = onSeekChapterPage,
+                nightMode = nightMode,
+                onToggleNightMode = onToggleNightMode,
                 onOpenChapterList = { chapterDrawerVisible = true },
             )
         }
         if (chapterDrawerVisible) {
-            AndroidChapterDrawer(
-                bookTitle = book.title,
-                chapters = displayedChapterEntries,
-                currentChapterOrd = displayedCurrentChapterOrd,
-                onDismiss = { chapterDrawerVisible = false },
-                onSelectChapter = { chapter ->
-                    chapterDrawerVisible = false
-                    onSelectChapterOrd?.invoke(chapter.chapterOrd) ?: onGoToPage(chapter.pageIndex)
-                },
-            )
+            // Same rule as the bottom panel: the drawer belongs to the reader chrome, so it follows
+            // the reader's day/night switch rather than the app theme.
+            ToreadTheme(useDynamicColor = false, darkTheme = nightMode) {
+                AndroidChapterDrawer(
+                    bookTitle = book.title,
+                    chapters = displayedChapterEntries,
+                    currentChapterOrd = displayedCurrentChapterOrd,
+                    onDismiss = { chapterDrawerVisible = false },
+                    onSelectChapter = { chapter ->
+                        chapterDrawerVisible = false
+                        onSelectChapterOrd?.invoke(chapter.chapterOrd) ?: onGoToPage(chapter.pageIndex)
+                    },
+                )
+            }
         }
     }
 }
@@ -810,71 +821,94 @@ private fun BoxScope.AndroidReaderBottomPanel(
     onPrevious: () -> Unit,
     onNext: () -> Unit,
     onSeekChapterPage: ((Int) -> Unit)?,
+    nightMode: Boolean,
+    onToggleNightMode: (() -> Unit)?,
     onOpenChapterList: () -> Unit,
 ) {
     val bottomInset = rememberSystemBarInsets().bottom
+    // The panel follows the reader's own day/night switch instead of the app theme, so it keeps
+    // matching the page surface while the reader is in night mode.
+    var draggedPage by remember(chapterPages) { mutableStateOf<Int?>(null) }
+    val shownPage = draggedPage ?: chapterPages?.pageNumber
 
-    Card(
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(start = 12.dp, top = 12.dp, end = 12.dp, bottom = bottomInset + 12.dp)
-            .align(Alignment.BottomCenter),
-    ) {
-        Column(
-            modifier = Modifier.padding(horizontal = 18.dp, vertical = 16.dp),
-            verticalArrangement = Arrangement.spacedBy(16.dp),
+    ToreadTheme(useDynamicColor = false, darkTheme = nightMode) {
+        Card(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(start = 12.dp, top = 12.dp, end = 12.dp, bottom = bottomInset + 12.dp)
+                .align(Alignment.BottomCenter),
         ) {
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically,
+            Column(
+                modifier = Modifier.padding(horizontal = 18.dp, vertical = 16.dp),
+                verticalArrangement = Arrangement.spacedBy(16.dp),
             ) {
-                TextButton(onClick = onPrevious, enabled = canPrevious) {
-                    ToreadSymbolIcon(
-                        symbol = ToreadSymbols.KeyboardArrowLeft,
-                        contentDescription = null,
-                        autoMirror = true,
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    TextButton(onClick = onPrevious, enabled = canPrevious) {
+                        ToreadSymbolIcon(
+                            symbol = ToreadSymbols.KeyboardArrowLeft,
+                            contentDescription = null,
+                            autoMirror = true,
+                        )
+                        Text(ToreadStrings.PreviousPage)
+                    }
+                    Text(
+                        text = if (chapterPages != null && shownPage != null) {
+                            ToreadStrings.chapterPageProgress(shownPage, chapterPages.pageCount)
+                        } else {
+                            ToreadStrings.readerPercent(progress)
+                        },
+                        style = MaterialTheme.typography.labelLarge,
                     )
-                    Text(ToreadStrings.PreviousPage)
+                    TextButton(onClick = onNext, enabled = canNext) {
+                        Text(ToreadStrings.NextPage)
+                        ToreadSymbolIcon(
+                            symbol = ToreadSymbols.KeyboardArrowRight,
+                            contentDescription = null,
+                            autoMirror = true,
+                        )
+                    }
                 }
-                Text(ToreadStrings.readerPercent(progress))
-                TextButton(onClick = onNext, enabled = canNext) {
-                    Text(ToreadStrings.NextPage)
-                    ToreadSymbolIcon(
-                        symbol = ToreadSymbols.KeyboardArrowRight,
-                        contentDescription = null,
-                        autoMirror = true,
+                ChapterPageSlider(
+                    chapterPages = chapterPages,
+                    draggedPage = draggedPage,
+                    bookProgress = progress,
+                    onDragPage = { draggedPage = it },
+                    onSeekChapterPage = onSeekChapterPage,
+                )
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceEvenly,
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    ReaderPanelButton(label = ToreadStrings.Catalog, symbol = ToreadSymbols.Menu, onClick = onOpenChapterList)
+                    ReaderPanelButton(
+                        label = if (nightMode) ToreadStrings.DayMode else ToreadStrings.NightMode,
+                        symbol = if (nightMode) ToreadSymbols.LightMode else ToreadSymbols.DarkMode,
+                        onClick = onToggleNightMode ?: {},
                     )
+                    ReaderPanelButton(label = ToreadStrings.ReaderSettings, symbol = ToreadSymbols.Settings)
                 }
-            }
-            ChapterPageSlider(
-                chapterPages = chapterPages,
-                bookProgress = progress,
-                onSeekChapterPage = onSeekChapterPage,
-            )
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceEvenly,
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                ReaderPanelButton(label = ToreadStrings.Catalog, symbol = ToreadSymbols.Menu, onClick = onOpenChapterList)
-                ReaderPanelButton(label = ToreadStrings.NightMode, symbol = ToreadSymbols.DarkMode)
-                ReaderPanelButton(label = ToreadStrings.ReaderSettings, symbol = ToreadSymbols.Settings)
             }
         }
     }
 }
 
 /**
- * Chapter progress for the reading panel: a label with the visible page inside its chapter and a
- * draggable slider that only commits on release, so dragging never restarts pagination per frame.
+ * Draggable slider whose thumb is a plain white circle instead of the Material bar, and which only
+ * commits on release, so dragging never restarts pagination per frame.
  *
  * Falls back to the book-wide progress bar while the chapter page count is still being measured.
  */
 @Composable
 private fun ChapterPageSlider(
     chapterPages: ReaderChapterPagePosition?,
+    draggedPage: Int?,
     bookProgress: Double,
+    onDragPage: (Int?) -> Unit,
     onSeekChapterPage: ((Int) -> Unit)?,
 ) {
     if (chapterPages == null || onSeekChapterPage == null) {
@@ -885,38 +919,43 @@ private fun ChapterPageSlider(
         return
     }
 
-    var draggedPage by remember(chapterPages) { mutableStateOf<Int?>(null) }
     val shownPage = draggedPage ?: chapterPages.pageNumber
 
-    Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
-        Text(
-            text = ToreadStrings.chapterPageProgress(shownPage, chapterPages.pageCount),
-            style = MaterialTheme.typography.labelMedium,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
+    if (chapterPages.pageCount <= 1) {
+        LinearProgressIndicator(
+            progress = { 1f },
+            modifier = Modifier.fillMaxWidth(),
         )
-        if (chapterPages.pageCount <= 1) {
-            LinearProgressIndicator(
-                progress = { 1f },
-                modifier = Modifier.fillMaxWidth(),
-            )
-        } else {
-            Slider(
-                value = shownPage.toFloat(),
-                onValueChange = { value ->
-                    draggedPage = value.roundToInt().coerceIn(1, chapterPages.pageCount)
-                },
-                valueRange = 1f..chapterPages.pageCount.toFloat(),
-                onValueChangeFinished = {
-                    val target = draggedPage
-                    draggedPage = null
-                    if (target != null && target != chapterPages.pageNumber) {
-                        onSeekChapterPage(target)
-                    }
-                },
-                modifier = Modifier.fillMaxWidth(),
-            )
-        }
+        return
     }
+
+    Slider(
+        value = shownPage.toFloat(),
+        onValueChange = { value ->
+            onDragPage(value.roundToInt().coerceIn(1, chapterPages.pageCount))
+        },
+        valueRange = 1f..chapterPages.pageCount.toFloat(),
+        onValueChangeFinished = {
+            val target = draggedPage
+            onDragPage(null)
+            if (target != null && target != chapterPages.pageNumber) {
+                onSeekChapterPage(target)
+            }
+        },
+        thumb = {
+            Box(
+                modifier = Modifier
+                    .size(ReaderSliderThumbSize)
+                    .background(Color.White, CircleShape)
+                    .border(
+                        width = 1.dp,
+                        color = MaterialTheme.colorScheme.outlineVariant,
+                        shape = CircleShape,
+                    ),
+            )
+        },
+        modifier = Modifier.fillMaxWidth(),
+    )
 }
 
 @Composable

@@ -52,6 +52,10 @@ class LocalSettingsRepository(
             ?.value_
             ?.takeIf { it.isNotBlank() }
 
+    /** Day/night for the Android EPUB/TXT reading surface; device-level and never synced. */
+    fun readerNightModeEnabled(): Boolean =
+        readBooleanSetting(key = ReaderNightModeKey, defaultValue = false)
+
     fun androidPdfReaderPreferences(): AndroidPdfReaderPreferences =
         AndroidPdfReaderPreferences(
             landscapeDoublePageEnabled = readBooleanSetting(
@@ -121,6 +125,10 @@ class LocalSettingsRepository(
 
     fun setAutoSyncEnabled(enabled: Boolean) {
         saveSetting(AutoSyncKey, enabled.toString())
+    }
+
+    fun setReaderNightModeEnabled(enabled: Boolean) {
+        saveSetting(ReaderNightModeKey, enabled.toString())
     }
 
     fun setBookshelfLayoutMode(value: String) {
@@ -258,6 +266,7 @@ class LocalSettingsRepository(
         const val DynamicColorKey = "dynamic_color_enabled"
         const val AutoSyncKey = "auto_sync_enabled"
         const val BookshelfLayoutModeKey = "bookshelf_layout_mode"
+        const val ReaderNightModeKey = "reader.night_mode_enabled"
         const val PdfAndroidLandscapeDoublePageKey =
             "reader.pdf.android.landscape_double_page_enabled"
         const val PdfAndroidVolumeKeysKey = "reader.pdf.android.volume_keys_enabled"

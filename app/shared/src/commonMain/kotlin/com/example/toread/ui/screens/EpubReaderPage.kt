@@ -39,6 +39,7 @@ import com.example.toread.reader.EpubPublicationIndex
 import com.example.toread.reader.ReaderContentLoader
 import com.example.toread.sync.ProgressSyncScheduler
 import com.example.toread.sync.ReadingProgressRemoteSource
+import com.example.toread.settings.LocalSettingsRepository
 import com.example.toread.ui.reader.AndroidReaderLayout
 import com.example.toread.ui.reader.DesktopReaderLayout
 import com.example.toread.ui.reader.EpubReflowSession
@@ -46,6 +47,7 @@ import com.example.toread.ui.reader.EpubReflowState
 import com.example.toread.ui.reader.ReaderChapterEntry
 import com.example.toread.ui.reader.ReaderChapterPagePosition
 import com.example.toread.ui.reader.ReaderMessage
+import com.example.toread.ui.reader.ReaderNightBackground
 import com.example.toread.ui.reader.ReaderProgressRemoteSyncPolicy
 import com.example.toread.ui.reader.rememberReaderPaginationSpec
 import com.example.toread.ui.reader.saveEpubReaderProgress
@@ -66,6 +68,7 @@ internal fun EpubReaderPage(
     remoteProgressSource: ReadingProgressRemoteSource?,
     progressSaveScope: CoroutineScope,
     readerContentLoader: ReaderContentLoader,
+    settingsRepository: LocalSettingsRepository? = null,
     onProgressSyncFinished: () -> Unit,
     onBack: () -> Unit,
 ) {
@@ -92,6 +95,9 @@ internal fun EpubReaderPage(
     var error by remember(book.bookHash) { mutableStateOf<String?>(null) }
     var controlsVisible by remember(book.bookHash) { mutableStateOf(false) }
     var hasUserNavigated by remember(book.bookHash) { mutableStateOf(false) }
+    var nightMode by remember(book.bookHash) {
+        mutableStateOf(settingsRepository?.readerNightModeEnabled() ?: false)
+    }
     var desktopDoublePageEnabled by remember(book.bookHash) { mutableStateOf(true) }
     var desktopNightModeEnabled by remember(book.bookHash) { mutableStateOf(true) }
     var desktopReaderFocusReady by remember(book.bookHash) { mutableStateOf(false) }
@@ -206,7 +212,9 @@ internal fun EpubReaderPage(
     Box(
         modifier = Modifier
             .fillMaxSize()
-            .background(MaterialTheme.colorScheme.background),
+            .background(
+                if (nightMode) ReaderNightBackground else MaterialTheme.colorScheme.background,
+            ),
     ) {
         val currentPublication = publication
         val currentSession = session
@@ -416,6 +424,11 @@ internal fun EpubReaderPage(
                             chapterPages = chapterPages,
                             onSeekChapterPage = { chapterPage ->
                                 navigate { jumpToChapterPage(chapterPage) }
+                            },
+                            nightMode = nightMode,
+                            onToggleNightMode = {
+                                nightMode = !nightMode
+                                settingsRepository?.setReaderNightModeEnabled(nightMode)
                             },
                         )
                     }
