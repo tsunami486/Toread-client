@@ -1,5 +1,6 @@
 package com.example.toread.ui.reader
 
+import com.example.toread.logging.ToreadClientLog
 import com.example.toread.reader.BookLocator
 import com.example.toread.reader.EpubChapterMetadata
 import com.example.toread.reader.EpubLocator
@@ -114,6 +115,16 @@ internal class EpubReflowSession(
             publication.previousChapter(resolvedChapter.ord) == null
         publicationEndReached = forward.reachedChapterEnd &&
             publication.nextChapter(resolvedChapter.ord) == null
+        ToreadClientLog.info(
+            ReaderLogArea,
+            "reader.window.publication_index",
+            "chapters" to publication.chapters.size,
+            "currentOrd" to resolvedChapter.ord,
+            "currentPosition" to publication.chapters.indexOfFirst { it.ord == resolvedChapter.ord },
+            "nextOrd" to publication.nextChapter(resolvedChapter.ord)?.ord,
+            "firstOrds" to publication.chapters.take(6).joinToString(",") { it.ord.toString() },
+            "lastOrds" to publication.chapters.takeLast(4).joinToString(",") { it.ord.toString() },
+        )
 
         ensureBackwardWindow()
         ensureForwardWindow()
@@ -129,6 +140,7 @@ internal class EpubReflowSession(
         if (target >= frames.size) return@withLock publish()
         activeIndex = target
         touchChapter(frames[activeIndex].page.chapterOrd)
+        publicationStartReached = false
         trimWindow()
         ensureForwardWindow()
         ensureBackwardWindow()
@@ -145,6 +157,9 @@ internal class EpubReflowSession(
         if (target == activeIndex) return@withLock publish()
         activeIndex = target
         touchChapter(frames[activeIndex].page.chapterOrd)
+        // Moving back means the publication end is no longer behind us, so the forward window may
+        // extend again instead of refusing every later forward turn.
+        publicationEndReached = false
         trimWindow()
         ensureBackwardWindow()
         ensureForwardWindow()
@@ -261,9 +276,32 @@ internal class EpubReflowSession(
         val currentSpec = spec ?: return
         val nextReadable = loadNextReadableChapter(chapterOrd)
         if (nextReadable == null) {
-            publicationEndReached = true
+            // Only a spine that really has no further chapter ends the publication. A chapter that
+            // merely failed to materialize must not latch the end: the forward window would then stop
+            // extending at this page and the reader would refuse every later forward turn.
+            val followingChapter = publication.nextChapter(chapterOrd)
+            if (followingChapter == null) {
+                publicationEndReached = true
+                ToreadClientLog.info(
+                    ReaderLogArea,
+                    "reader.window.publication_end",
+                    "lastOrd" to chapterOrd,
+                    "frames" to frames.size,
+                    "activeIndex" to activeIndex,
+                )
+            } else {
+                ToreadClientLog.warn(
+                    ReaderLogArea,
+                    "reader.window.forward_unresolved",
+                    "fromOrd" to chapterOrd,
+                    "nextOrd" to followingChapter.ord,
+                    "frames" to frames.size,
+                    "activeIndex" to activeIndex,
+                )
+            }
             return
         }
+        publicationStartReached = false
         val (nextChapter, nextDocument) = nextReadable
         val prefetched = if (prefetchedChapterOrd == nextChapter.ord) {
             prefetchedChapterFrames
@@ -283,6 +321,15 @@ internal class EpubReflowSession(
             maxPages = maxPages,
         )
         appendDistinct(batch.pages.map(::EpubPageFrame))
+        ToreadClientLog.info(
+            ReaderLogArea,
+            "reader.window.chapter_appended",
+            "fromOrd" to chapterOrd,
+            "appendedOrd" to nextChapter.ord,
+            "pages" to batch.pages.size,
+            "frames" to frames.size,
+            "activeIndex" to activeIndex,
+        )
         publicationEndReached = batch.reachedChapterEnd &&
             publication.nextChapter(nextChapter.ord) == null
     }
@@ -335,9 +382,24 @@ internal class EpubReflowSession(
         val currentSpec = spec ?: return
         val previousReadable = loadPreviousReadableChapter(chapterOrd)
         if (previousReadable == null) {
-            publicationStartReached = true
+            // Mirror of appendNextChapter: the start may only latch when the spine really has no
+            // earlier chapter, otherwise backward turns would stop working after moving forward.
+            val earlierChapter = publication.previousChapter(chapterOrd)
+            if (earlierChapter == null) {
+                publicationStartReached = true
+            } else {
+                ToreadClientLog.warn(
+                    ReaderLogArea,
+                    "reader.window.backward_unresolved",
+                    "fromOrd" to chapterOrd,
+                    "previousOrd" to earlierChapter.ord,
+                    "frames" to frames.size,
+                    "activeIndex" to activeIndex,
+                )
+            }
             return
         }
+        publicationEndReached = false
         val (previousChapter, previousDocument) = previousReadable
         val previousEnd = previousDocument.epubChapterEndLocator() ?: return
         val batch = previousDocument.paginateEpubBackward(
@@ -428,6 +490,12 @@ internal class EpubReflowSession(
         }
         val loaded = chapterLoader(chapterOrd) ?: run {
             unreadableChapterOrds += chapterOrd
+            ToreadClientLog.warn(
+                ReaderLogArea,
+                "reader.window.chapter_unreadable",
+                "ord" to chapterOrd,
+                "blacklisted" to unreadableChapterOrds.size,
+            )
             return null
         }
         chapterCache[chapterOrd] = loaded
@@ -450,6 +518,16 @@ internal class EpubReflowSession(
         chapterOrd: Int,
     ): Pair<EpubChapterMetadata, ReaderDocument>? {
         var candidate = publication.nextChapter(chapterOrd)
+        if (candidate != null && candidate.ord != chapterOrd + 1) {
+            ToreadClientLog.warn(
+                ReaderLogArea,
+                "reader.window.chapter_jump",
+                "fromOrd" to chapterOrd,
+                "nextOrd" to candidate.ord,
+                "chapters" to publication.chapters.size,
+                "blacklisted" to unreadableChapterOrds.size,
+            )
+        }
         while (candidate != null) {
             loadChapter(candidate.ord)?.let { return candidate to it }
             candidate = publication.nextChapter(candidate.ord)
@@ -539,6 +617,8 @@ private fun EpubPublicationIndex.nextChapter(chapterOrd: Int): EpubChapterMetada
     val index = chapters.indexOfFirst { it.ord == chapterOrd }
     return chapters.getOrNull(index + 1)
 }
+
+private const val ReaderLogArea = "reader"
 
 private fun ReaderDocument.resolveOpeningCursor(locator: EpubLocator?): ReaderTextLocator? {
     val start = epubChapterStartLocator() ?: return null
