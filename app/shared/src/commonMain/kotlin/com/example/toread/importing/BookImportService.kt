@@ -8,6 +8,8 @@ import com.example.toread.platform.PlatformFile
 import com.example.toread.platform.PlatformFilePicker
 import com.example.toread.sync.BookMetadataJson
 import com.example.toread.sync.BookMetadataSyncPayload
+import com.example.toread.ui.text.ToreadStrings
+import kotlinx.coroutines.CancellationException
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.buildJsonObject
@@ -32,7 +34,18 @@ class BookImportService(
         importFiles(filePicker.pickFiles(supportedBookExtensions.toList()))
 
     suspend fun importFiles(files: List<PlatformFile>): List<BookImportResult> =
-        files.map { file -> importFile(file) }
+        files.map { file ->
+            // One unreadable item must not take the rest of a multi-file drop down with it.
+            try {
+                importFile(file)
+            } catch (throwable: Throwable) {
+                if (throwable is CancellationException) throw throwable
+                BookImportResult.Failed(
+                    fileName = file.displayName,
+                    reason = throwable.message ?: ToreadStrings.ImportFailedGeneric,
+                )
+            }
+        }
 
     suspend fun importFile(file: PlatformFile): BookImportResult {
         val validation = validateImportFile(file)

@@ -2,6 +2,7 @@ package com.example.toread.platform
 
 import java.awt.FileDialog
 import java.awt.Frame
+import java.net.URI
 import java.nio.file.Files
 import java.nio.file.Path
 import java.nio.file.Paths
@@ -26,14 +27,55 @@ actual class PlatformFilePicker actual constructor() {
  * dropped file arrives with exactly the same name, MIME type and size a picked one does.
  */
 internal fun platformFileFromPath(path: String): PlatformFile {
-    val resolved = runCatching { Paths.get(path).toAbsolutePath() }.getOrNull()
+    val resolved = resolveLocalFilePath(path)
     return PlatformFile(
-        displayName = resolved?.fileName?.toString()
-            ?: path.substringAfterLast('\\').substringAfterLast('/'),
-        path = resolved?.toString() ?: path,
+        displayName = resolved?.fileName?.toString() ?: fallbackDisplayName(path),
+        path = resolved?.toString() ?: path.trim(),
         mimeType = resolved?.let { runCatching { Files.probeContentType(it) }.getOrNull() },
         sizeBytes = resolved?.let { runCatching { Files.size(it) }.getOrNull() },
     )
+}
+
+/**
+ * Resolves what a platform hands us into a real path.
+ *
+ * A desktop drop delivers **`file:` URIs** (`file:/E:/Downloads/书名%20(全8册).epub`), not paths — the
+ * picker delivers plain paths. `Paths.get` rejects a URI with `Illegal char <:>`, so the URI form has to
+ * go through `Paths.get(URI)`, which also percent-decodes the name. Anything unresolvable returns null
+ * and the caller keeps the raw string, so a bad item is reported per file instead of throwing.
+ */
+internal fun resolveLocalFilePath(pathOrUri: String): Path? {
+    val trimmed = pathOrUri.trim().trim('"')
+    if (trimmed.isEmpty()) return null
+    val parsed = runCatching {
+        if (trimmed.startsWith("file:", ignoreCase = true)) {
+            Paths.get(URI(trimmed))
+        } else {
+            Paths.get(trimmed)
+        }
+    }.getOrNull()
+    return (parsed ?: windowsFileUriPath(trimmed))?.toAbsolutePath()
+}
+
+/**
+ * Last resort for a `file:` string that is not a valid URI — an encoder that left spaces raw, or a bare
+ * `file:C:\books\a.epub`. Only drive-letter candidates are accepted, so a Unix path or a UNC share can
+ * never be silently mangled into a relative one.
+ */
+private fun windowsFileUriPath(value: String): Path? {
+    if (!value.startsWith("file:", ignoreCase = true)) return null
+    val candidate = value.substringAfter(':').trimStart('/')
+    if (candidate.length < 2 || candidate[1] != ':') return null
+    return runCatching { Paths.get(candidate) }.getOrNull()
+}
+
+private fun fallbackDisplayName(pathOrUri: String): String {
+    val trimmed = pathOrUri.trim().trim('"')
+    val lastSegment = trimmed.substringAfterLast('/').substringAfterLast('\\')
+    if (!trimmed.startsWith("file:", ignoreCase = true)) return lastSegment
+    val decoded = windowsFileUriPath(trimmed)?.fileName?.toString()
+        ?: runCatching { Paths.get(URI(lastSegment)).fileName?.toString() }.getOrNull()
+    return decoded ?: lastSegment
 }
 
 actual class SecureTokenStore actual constructor() {
