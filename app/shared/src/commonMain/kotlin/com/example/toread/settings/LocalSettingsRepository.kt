@@ -56,6 +56,42 @@ class LocalSettingsRepository(
     fun readerNightModeEnabled(): Boolean =
         readBooleanSetting(key = ReaderNightModeKey, defaultValue = false)
 
+    /**
+     * Appearance settings for the whole app. [ToreadAppearancePreferences.readerNightModeFollowSystem]
+     * keeps [readerNightModeEnabled] unused until the reader stops following the app theme.
+     */
+    fun appearancePreferences(): ToreadAppearancePreferences =
+        ToreadAppearancePreferences(
+            themeMode = ToreadThemeMode.fromStoredValue(readSetting(ThemeModeKey))
+                ?: ToreadThemeMode.System,
+            dynamicColorEnabled = dynamicColorEnabled(),
+            palette = ToreadPalette.fromStoredValue(readSetting(ThemePaletteKey))
+                ?: ToreadPalette.Indigo,
+            highContrastDarkTheme = readBooleanSetting(
+                key = ThemeHighContrastDarkKey,
+                defaultValue = false,
+            ),
+            readerNightModeFollowSystem = readBooleanSetting(
+                key = ReaderNightFollowSystemKey,
+                defaultValue = true,
+            ),
+        )
+
+    fun setAppearancePreferences(preferences: ToreadAppearancePreferences) {
+        saveSetting(ThemeModeKey, preferences.themeMode.storedValue)
+        saveSetting(DynamicColorKey, preferences.dynamicColorEnabled.toString())
+        saveSetting(ThemePaletteKey, preferences.palette.storedValue)
+        saveSetting(ThemeHighContrastDarkKey, preferences.highContrastDarkTheme.toString())
+        saveSetting(
+            ReaderNightFollowSystemKey,
+            preferences.readerNightModeFollowSystem.toString(),
+        )
+    }
+
+    fun setReaderNightModeFollowSystem(enabled: Boolean) {
+        saveSetting(ReaderNightFollowSystemKey, enabled.toString())
+    }
+
     fun androidPdfReaderPreferences(): AndroidPdfReaderPreferences =
         AndroidPdfReaderPreferences(
             landscapeDoublePageEnabled = readBooleanSetting(
@@ -266,7 +302,11 @@ class LocalSettingsRepository(
         const val DynamicColorKey = "dynamic_color_enabled"
         const val AutoSyncKey = "auto_sync_enabled"
         const val BookshelfLayoutModeKey = "bookshelf_layout_mode"
+        const val ThemeModeKey = "theme_mode"
+        const val ThemePaletteKey = "theme_palette"
+        const val ThemeHighContrastDarkKey = "theme.high_contrast_dark"
         const val ReaderNightModeKey = "reader.night_mode_enabled"
+        const val ReaderNightFollowSystemKey = "reader.night_mode_follow_system"
         const val PdfAndroidLandscapeDoublePageKey =
             "reader.pdf.android.landscape_double_page_enabled"
         const val PdfAndroidVolumeKeysKey = "reader.pdf.android.volume_keys_enabled"

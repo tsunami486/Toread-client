@@ -1,6 +1,7 @@
 package com.example.toread
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
@@ -47,6 +48,7 @@ import com.example.toread.platform.SecureTokenStore
 import com.example.toread.reader.ReaderContentLoader
 import com.example.toread.settings.AuthMode
 import com.example.toread.settings.LocalSettingsRepository
+import com.example.toread.settings.ToreadAppearancePreferences
 import com.example.toread.sync.HttpReadingProgressSyncUploader
 import com.example.toread.sync.HttpReadingProgressRemoteSource
 import com.example.toread.sync.HttpBookMetadataSyncUploader
@@ -117,7 +119,7 @@ fun ToreadApp() {
     var authSessionExpiresInSeconds by remember { mutableStateOf<Long?>(null) }
     var scheduledAuthRefreshRetry by remember { mutableStateOf(false) }
     var authRefreshRetryAttempt by remember { mutableIntStateOf(0) }
-    var dynamicColorEnabled by remember { mutableStateOf(false) }
+    var appearance by remember { mutableStateOf(ToreadAppearancePreferences()) }
     val autoSyncEnabledState = remember { mutableStateOf(true) }
     var autoSyncEnabled by autoSyncEnabledState
     var bookshelfLayoutMode by remember { mutableStateOf(BookshelfLayoutMode.Grid) }
@@ -603,7 +605,7 @@ fun ToreadApp() {
 
     LaunchedEffect(settingsRepository) {
         val repository = settingsRepository
-        dynamicColorEnabled = repository?.dynamicColorEnabled() ?: false
+        appearance = repository?.appearancePreferences() ?: ToreadAppearancePreferences()
         val storedAutoSyncEnabled = repository?.autoSyncEnabled() ?: true
         autoSyncEnabled = storedAutoSyncEnabled
         bookshelfLayoutMode = BookshelfLayoutMode.fromStoredValue(repository?.bookshelfLayoutMode())
@@ -691,7 +693,12 @@ fun ToreadApp() {
     val isReaderScreen = screen == ToreadScreen.Reader
     val isBookshelfScreen = screen == ToreadScreen.Bookshelf
 
-    ToreadTheme(useDynamicColor = dynamicColorEnabled) {
+    ToreadTheme(
+        useDynamicColor = appearance.dynamicColorEnabled,
+        darkTheme = appearance.themeMode.isDark(isSystemInDarkTheme()),
+        palette = appearance.palette,
+        highContrastDark = appearance.highContrastDarkTheme,
+    ) {
         Surface(
             modifier = Modifier
                 .fillMaxSize()
@@ -790,11 +797,16 @@ fun ToreadApp() {
                         )
                         ToreadScreen.Settings -> SettingsPage(
                             settingsRepository = settingsRepository,
-                            dynamicColorEnabled = dynamicColorEnabled,
+                            appearance = appearance,
                             autoSyncEnabled = autoSyncEnabled,
-                            onDynamicColorEnabledChange = { enabled ->
-                                settingsRepository?.setDynamicColorEnabled(enabled)
-                                dynamicColorEnabled = enabled
+                            bookshelfLayoutMode = bookshelfLayoutMode,
+                            onAppearanceChange = { updated ->
+                                appearance = updated
+                                settingsRepository?.setAppearancePreferences(updated)
+                            },
+                            onBookshelfLayoutModeChange = { mode ->
+                                bookshelfLayoutMode = mode
+                                settingsRepository?.setBookshelfLayoutMode(mode.storedValue)
                             },
                             onAutoSyncEnabledChange = { enabled ->
                                 settingsRepository?.setAutoSyncEnabled(enabled)

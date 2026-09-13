@@ -1,15 +1,16 @@
 package com.example.toread.ui.screens
 
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ColumnScope
-import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -22,12 +23,11 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.AlertDialog
-import androidx.compose.material3.ButtonDefaults
-import androidx.compose.material3.Card
-import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.RadioButton
+import androidx.compose.material3.RadioButtonDefaults
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -39,43 +39,60 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.drawWithContent
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.Path
+import androidx.compose.ui.graphics.drawscope.clipPath
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.toread.platform.PlatformBackHandler
 import com.example.toread.settings.AuthMode
 import com.example.toread.settings.LocalSettingsRepository
+import com.example.toread.settings.ToreadAppearancePreferences
+import com.example.toread.settings.ToreadPalette
+import com.example.toread.settings.ToreadThemeMode
 import com.example.toread.ui.icons.ToreadSymbolIcon
 import com.example.toread.ui.icons.ToreadSymbols
 import com.example.toread.ui.text.ToreadStrings
+import com.example.toread.ui.theme.paletteSwatchColors
+import com.example.toread.ui.theme.toreadColorScheme
 import org.jetbrains.compose.resources.DrawableResource
 
-private enum class SettingsSection(
-    val title: String,
-    val symbol: DrawableResource,
-) {
-    Account(ToreadStrings.AccountInfo, ToreadSymbols.AccountCircle),
-    Sync(ToreadStrings.SyncAndNetwork, ToreadSymbols.Sync),
-    Appearance(ToreadStrings.AppearanceAndReading, ToreadSymbols.Palette),
-    Storage(ToreadStrings.StorageAndSystem, ToreadSymbols.Tune),
+/**
+ * Settings is one flat, grouped list: a section label followed by rows, each row an icon, a title and
+ * an optional description, control or chevron. Rows that own more than a single toggle open a sub page
+ * instead of growing the list, which is what the 主题与色彩 and 界面 pages are for.
+ */
+private enum class SettingsSubPage {
+    Interface,
+    Appearance,
 }
 
-private val ExpandedSettingsMinWidth = 900.dp
+private val SettingsContentMaxWidth = 720.dp
+private val SettingsRowMinHeight = 56.dp
 
 @Composable
 internal fun SettingsPage(
     settingsRepository: LocalSettingsRepository?,
-    dynamicColorEnabled: Boolean,
+    appearance: ToreadAppearancePreferences,
     autoSyncEnabled: Boolean,
-    onDynamicColorEnabledChange: (Boolean) -> Unit,
+    bookshelfLayoutMode: BookshelfLayoutMode,
+    onAppearanceChange: (ToreadAppearancePreferences) -> Unit,
     onAutoSyncEnabledChange: (Boolean) -> Unit,
+    onBookshelfLayoutModeChange: (BookshelfLayoutMode) -> Unit,
     onBack: () -> Unit,
     onLogout: () -> Unit,
     onClearCache: () -> Unit,
 ) {
-    PlatformBackHandler(enabled = true, onBack = onBack)
+    var subPage by remember { mutableStateOf<SettingsSubPage?>(null) }
+    var showAboutDialog by remember { mutableStateOf(false) }
+
+    PlatformBackHandler(enabled = true) {
+        if (subPage != null) subPage = null else onBack()
+    }
 
     val authMode = settingsRepository?.currentAuthMode()
     val userEmail = settingsRepository?.userEmail()
@@ -89,46 +106,55 @@ internal fun SettingsPage(
         authMode == AuthMode.Guest -> ToreadStrings.LocalReadingOnly
         else -> ToreadStrings.LoginToSync
     }
-    var showAboutDialog by remember { mutableStateOf(false) }
-    var selectedSection by remember { mutableStateOf(SettingsSection.Account) }
 
-    BoxWithConstraints(
+    Box(
         modifier = Modifier
             .fillMaxSize()
             .background(MaterialTheme.colorScheme.background),
+        contentAlignment = Alignment.TopCenter,
     ) {
-        if (maxWidth >= ExpandedSettingsMinWidth) {
-            SettingsTwoPane(
-                selectedSection = selectedSection,
-                onSelectedSectionChange = { selectedSection = it },
-                accountTitle = accountTitle,
-                accountSubtitle = accountSubtitle,
-                logoutEnabled = settingsRepository != null,
-                dynamicColorEnabled = dynamicColorEnabled,
-                autoSyncEnabled = autoSyncEnabled,
-                settingsEnabled = settingsRepository != null,
-                onDynamicColorEnabledChange = onDynamicColorEnabledChange,
-                onAutoSyncEnabledChange = onAutoSyncEnabledChange,
-                onBack = onBack,
-                onLogout = onLogout,
-                onClearCache = onClearCache,
-                onAbout = { showAboutDialog = true },
+        Column(
+            modifier = Modifier
+                .widthIn(max = SettingsContentMaxWidth)
+                .fillMaxWidth()
+                .fillMaxSize()
+                .verticalScroll(rememberScrollState())
+                .padding(start = 20.dp, end = 20.dp, bottom = 32.dp),
+        ) {
+            SettingsHeader(
+                title = when (subPage) {
+                    SettingsSubPage.Interface -> ToreadStrings.SettingsInterface
+                    SettingsSubPage.Appearance -> ToreadStrings.SettingsAppearance
+                    null -> ToreadStrings.Settings
+                },
+                onBack = { if (subPage != null) subPage = null else onBack() },
             )
-        } else {
-            SettingsSinglePane(
-                accountTitle = accountTitle,
-                accountSubtitle = accountSubtitle,
-                logoutEnabled = settingsRepository != null,
-                dynamicColorEnabled = dynamicColorEnabled,
-                autoSyncEnabled = autoSyncEnabled,
-                settingsEnabled = settingsRepository != null,
-                onDynamicColorEnabledChange = onDynamicColorEnabledChange,
-                onAutoSyncEnabledChange = onAutoSyncEnabledChange,
-                onBack = onBack,
-                onLogout = onLogout,
-                onClearCache = onClearCache,
-                onAbout = { showAboutDialog = true },
-            )
+
+            when (subPage) {
+                SettingsSubPage.Interface -> InterfaceSettingsContent(
+                    bookshelfLayoutMode = bookshelfLayoutMode,
+                    settingsEnabled = settingsRepository != null,
+                    onBookshelfLayoutModeChange = onBookshelfLayoutModeChange,
+                )
+                SettingsSubPage.Appearance -> AppearanceSettingsContent(
+                    appearance = appearance,
+                    settingsEnabled = settingsRepository != null,
+                    onAppearanceChange = onAppearanceChange,
+                )
+                null -> SettingsOverviewContent(
+                    accountTitle = accountTitle,
+                    accountSubtitle = accountSubtitle,
+                    logoutEnabled = settingsRepository != null,
+                    autoSyncEnabled = autoSyncEnabled,
+                    settingsEnabled = settingsRepository != null,
+                    onAutoSyncEnabledChange = onAutoSyncEnabledChange,
+                    onOpenInterface = { subPage = SettingsSubPage.Interface },
+                    onOpenAppearance = { subPage = SettingsSubPage.Appearance },
+                    onClearCache = onClearCache,
+                    onAbout = { showAboutDialog = true },
+                    onLogout = onLogout,
+                )
+            }
         }
     }
 
@@ -152,310 +178,181 @@ internal fun SettingsPage(
 }
 
 @Composable
-private fun SettingsSinglePane(
+private fun SettingsOverviewContent(
     accountTitle: String,
     accountSubtitle: String,
     logoutEnabled: Boolean,
-    dynamicColorEnabled: Boolean,
     autoSyncEnabled: Boolean,
     settingsEnabled: Boolean,
-    onDynamicColorEnabledChange: (Boolean) -> Unit,
     onAutoSyncEnabledChange: (Boolean) -> Unit,
-    onBack: () -> Unit,
-    onLogout: () -> Unit,
+    onOpenInterface: () -> Unit,
+    onOpenAppearance: () -> Unit,
     onClearCache: () -> Unit,
     onAbout: () -> Unit,
+    onLogout: () -> Unit,
 ) {
-    Column(
-        modifier = Modifier
-            .fillMaxSize()
-            .verticalScroll(rememberScrollState())
-            .padding(bottom = 24.dp),
-        verticalArrangement = Arrangement.spacedBy(18.dp),
-    ) {
-        SettingsHeader(onBack = onBack)
-        AccountInfoCard(
-            title = accountTitle,
-            subtitle = accountSubtitle,
-            logoutEnabled = logoutEnabled,
-            onLogout = onLogout,
+    SettingsAccountRow(title = accountTitle, subtitle = accountSubtitle)
+    SettingsGroup(title = ToreadStrings.SettingsGroupAppAndInterface) {
+        SettingsNavigationRow(
+            symbol = ToreadSymbols.ViewColumn,
+            title = ToreadStrings.SettingsInterface,
+            description = ToreadStrings.SettingsInterfaceDescription,
+            onClick = onOpenInterface,
         )
-        SettingsSectionCard(
-            title = SettingsSection.Sync.title,
-            symbol = SettingsSection.Sync.symbol,
-        ) {
-            SyncSettingsContent(
-                autoSyncEnabled = autoSyncEnabled,
-                settingsEnabled = settingsEnabled,
-                onAutoSyncEnabledChange = onAutoSyncEnabledChange,
-            )
-        }
-        SettingsSectionCard(
-            title = SettingsSection.Appearance.title,
-            symbol = SettingsSection.Appearance.symbol,
-        ) {
-            AppearanceSettingsContent(
-                dynamicColorEnabled = dynamicColorEnabled,
-                settingsEnabled = settingsEnabled,
-                onDynamicColorEnabledChange = onDynamicColorEnabledChange,
-            )
-        }
-        SettingsSectionCard(
-            title = SettingsSection.Storage.title,
-            symbol = SettingsSection.Storage.symbol,
-        ) {
-            StorageSettingsContent(
-                onClearCache = onClearCache,
-                onAbout = onAbout,
-            )
-        }
+        SettingsNavigationRow(
+            symbol = ToreadSymbols.Palette,
+            title = ToreadStrings.SettingsAppearance,
+            description = ToreadStrings.SettingsAppearanceDescription,
+            onClick = onOpenAppearance,
+        )
+    }
+    SettingsGroup(title = ToreadStrings.SettingsGroupDataAndSync) {
+        SettingsSwitchRow(
+            symbol = ToreadSymbols.Sync,
+            title = ToreadStrings.AutoSync,
+            description = ToreadStrings.AutoSyncDescription,
+            checked = autoSyncEnabled,
+            enabled = settingsEnabled,
+            onCheckedChange = onAutoSyncEnabledChange,
+        )
+    }
+    SettingsGroup(title = ToreadStrings.SettingsGroupStorageAndSystem) {
+        SettingsNavigationRow(
+            symbol = ToreadSymbols.DeleteSweep,
+            title = ToreadStrings.ClearCache,
+            onClick = onClearCache,
+        )
+        SettingsNavigationRow(
+            symbol = ToreadSymbols.Info,
+            title = ToreadStrings.About,
+            trailingText = ToreadStrings.Version100,
+            onClick = onAbout,
+        )
+        SettingsNavigationRow(
+            symbol = ToreadSymbols.Logout,
+            title = ToreadStrings.LogoutState,
+            description = ToreadStrings.LogoutLocalOnlyHint,
+            enabled = logoutEnabled,
+            onClick = onLogout,
+        )
     }
 }
 
 @Composable
-private fun SettingsTwoPane(
-    selectedSection: SettingsSection,
-    onSelectedSectionChange: (SettingsSection) -> Unit,
-    accountTitle: String,
-    accountSubtitle: String,
-    logoutEnabled: Boolean,
-    dynamicColorEnabled: Boolean,
-    autoSyncEnabled: Boolean,
+private fun InterfaceSettingsContent(
+    bookshelfLayoutMode: BookshelfLayoutMode,
     settingsEnabled: Boolean,
-    onDynamicColorEnabledChange: (Boolean) -> Unit,
-    onAutoSyncEnabledChange: (Boolean) -> Unit,
-    onBack: () -> Unit,
-    onLogout: () -> Unit,
-    onClearCache: () -> Unit,
-    onAbout: () -> Unit,
+    onBookshelfLayoutModeChange: (BookshelfLayoutMode) -> Unit,
 ) {
-    Row(
-        modifier = Modifier.fillMaxSize(),
-        horizontalArrangement = Arrangement.spacedBy(24.dp),
-    ) {
-        SettingsSidebar(
-            selectedSection = selectedSection,
-            onSelectedSectionChange = onSelectedSectionChange,
-            accountSubtitle = accountSubtitle,
-            onBack = onBack,
-        )
-        SettingsDetailPane(
-            selectedSection = selectedSection,
-            accountTitle = accountTitle,
-            accountSubtitle = accountSubtitle,
-            logoutEnabled = logoutEnabled,
-            dynamicColorEnabled = dynamicColorEnabled,
-            autoSyncEnabled = autoSyncEnabled,
-            settingsEnabled = settingsEnabled,
-            onDynamicColorEnabledChange = onDynamicColorEnabledChange,
-            onAutoSyncEnabledChange = onAutoSyncEnabledChange,
-            onLogout = onLogout,
-            onClearCache = onClearCache,
-            onAbout = onAbout,
-            modifier = Modifier
-                .weight(1f)
-                .fillMaxHeight(),
-        )
-    }
-}
-
-@Composable
-private fun SettingsSidebar(
-    selectedSection: SettingsSection,
-    onSelectedSectionChange: (SettingsSection) -> Unit,
-    accountSubtitle: String,
-    onBack: () -> Unit,
-) {
-    Column(
-        modifier = Modifier
-            .width(320.dp)
-            .fillMaxHeight()
-            .verticalScroll(rememberScrollState())
-            .padding(bottom = 24.dp),
-        verticalArrangement = Arrangement.spacedBy(18.dp),
-    ) {
-        SettingsHeader(onBack = onBack)
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(horizontal = 12.dp, vertical = 12.dp),
-            horizontalArrangement = Arrangement.spacedBy(14.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            SectionIcon(symbol = ToreadSymbols.AccountCircle, modifier = Modifier.size(56.dp))
-            Text(
-                text = accountSubtitle,
-                color = MaterialTheme.colorScheme.onBackground,
-                fontSize = 15.sp,
-                fontWeight = FontWeight.SemiBold,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-            )
-        }
-        SettingsSidebarGroup(title = ToreadStrings.Account) {
-            SettingsSidebarItem(
-                section = SettingsSection.Account,
-                selected = selectedSection == SettingsSection.Account,
-                onClick = { onSelectedSectionChange(SettingsSection.Account) },
-            )
-        }
-        SettingsSidebarGroup(title = ToreadStrings.SyncAndReading) {
-            SettingsSidebarItem(
-                section = SettingsSection.Sync,
-                selected = selectedSection == SettingsSection.Sync,
-                onClick = { onSelectedSectionChange(SettingsSection.Sync) },
-            )
-            SettingsSidebarItem(
-                section = SettingsSection.Appearance,
-                selected = selectedSection == SettingsSection.Appearance,
-                onClick = { onSelectedSectionChange(SettingsSection.Appearance) },
-            )
-        }
-        SettingsSidebarGroup(title = ToreadStrings.StorageAndSystem) {
-            SettingsSidebarItem(
-                section = SettingsSection.Storage,
-                selected = selectedSection == SettingsSection.Storage,
-                onClick = { onSelectedSectionChange(SettingsSection.Storage) },
-            )
-        }
-    }
-}
-
-@Composable
-private fun SettingsSidebarGroup(
-    title: String,
-    content: @Composable ColumnScope.() -> Unit,
-) {
-    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+    SettingsGroup(title = ToreadStrings.BookshelfLayout) {
         Text(
-            text = title,
-            color = MaterialTheme.colorScheme.primary,
-            fontSize = 15.sp,
-            fontWeight = FontWeight.Medium,
-            modifier = Modifier.padding(horizontal = 16.dp),
+            text = ToreadStrings.BookshelfLayoutDescription,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            fontSize = 14.sp,
+            modifier = Modifier.padding(bottom = 4.dp),
         )
-        content()
+        SettingsChoiceRow(
+            title = ToreadStrings.BookshelfLayoutGrid,
+            selected = bookshelfLayoutMode == BookshelfLayoutMode.Grid,
+            enabled = settingsEnabled,
+            onClick = { onBookshelfLayoutModeChange(BookshelfLayoutMode.Grid) },
+        )
+        SettingsChoiceRow(
+            title = ToreadStrings.BookshelfLayoutList,
+            selected = bookshelfLayoutMode == BookshelfLayoutMode.List,
+            enabled = settingsEnabled,
+            onClick = { onBookshelfLayoutModeChange(BookshelfLayoutMode.List) },
+        )
     }
 }
 
 @Composable
-private fun SettingsSidebarItem(
-    section: SettingsSection,
-    selected: Boolean,
-    onClick: () -> Unit,
+private fun AppearanceSettingsContent(
+    appearance: ToreadAppearancePreferences,
+    settingsEnabled: Boolean,
+    onAppearanceChange: (ToreadAppearancePreferences) -> Unit,
 ) {
+    SettingsGroup(title = ToreadStrings.SettingsSectionTheme) {
+        ThemeModePicker(
+            selected = appearance.themeMode,
+            enabled = settingsEnabled,
+            palette = appearance.palette,
+            onSelect = { mode ->
+                onAppearanceChange(appearance.copy(themeMode = mode))
+            },
+        )
+        Text(
+            text = ToreadStrings.ThemeModeDescription,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            fontSize = 13.sp,
+        )
+    }
+
+    SettingsGroup {
+        SettingsSwitchRow(
+            symbol = ToreadSymbols.Palette,
+            title = ToreadStrings.DynamicColor,
+            description = ToreadStrings.DynamicColorDescription,
+            checked = appearance.dynamicColorEnabled,
+            enabled = settingsEnabled,
+            onCheckedChange = { enabled ->
+                onAppearanceChange(appearance.copy(dynamicColorEnabled = enabled))
+            },
+        )
+        SettingsSwitchRow(
+            symbol = ToreadSymbols.DarkMode,
+            title = ToreadStrings.HighContrastDarkTheme,
+            description = ToreadStrings.HighContrastDarkThemeDescription,
+            checked = appearance.highContrastDarkTheme,
+            enabled = settingsEnabled,
+            onCheckedChange = { enabled ->
+                onAppearanceChange(appearance.copy(highContrastDarkTheme = enabled))
+            },
+        )
+        SettingsSwitchRow(
+            symbol = ToreadSymbols.LightMode,
+            title = ToreadStrings.ReaderNightFollowSystem,
+            description = ToreadStrings.ReaderNightFollowSystemDescription,
+            checked = appearance.readerNightModeFollowSystem,
+            enabled = settingsEnabled,
+            onCheckedChange = { enabled ->
+                onAppearanceChange(appearance.copy(readerNightModeFollowSystem = enabled))
+            },
+        )
+    }
+
+    SettingsGroup(title = ToreadStrings.SettingsSectionPalette) {
+        Text(
+            text = if (appearance.dynamicColorEnabled) {
+                ToreadStrings.PaletteDynamicColorHint
+            } else {
+                ToreadStrings.PaletteDescription
+            },
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            fontSize = 13.sp,
+        )
+        PaletteGrid(
+            selected = appearance.palette,
+            enabled = settingsEnabled,
+            onSelect = { palette ->
+                // Choosing a palette is a choice about the accent, so it takes over from dynamic color.
+                onAppearanceChange(
+                    appearance.copy(palette = palette, dynamicColorEnabled = false),
+                )
+            },
+        )
+    }
+}
+
+@Composable
+private fun SettingsHeader(title: String, onBack: () -> Unit) {
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .clip(RoundedCornerShape(28.dp))
-            .background(if (selected) MaterialTheme.colorScheme.primaryContainer else Color.Transparent)
-            .clickable(onClick = onClick)
-            .padding(horizontal = 18.dp, vertical = 14.dp),
-        horizontalArrangement = Arrangement.spacedBy(14.dp),
+            .padding(top = 6.dp, bottom = 10.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        ToreadSymbolIcon(
-            symbol = section.symbol,
-            contentDescription = null,
-            tint = if (selected) {
-                MaterialTheme.colorScheme.onPrimaryContainer
-            } else {
-                MaterialTheme.colorScheme.onBackground
-            },
-            modifier = Modifier.size(24.dp),
-        )
-        Text(
-            text = section.title,
-            color = if (selected) {
-                MaterialTheme.colorScheme.onPrimaryContainer
-            } else {
-                MaterialTheme.colorScheme.onBackground
-            },
-            fontSize = 17.sp,
-            fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal,
-        )
-    }
-}
-
-@Composable
-private fun SettingsDetailPane(
-    selectedSection: SettingsSection,
-    accountTitle: String,
-    accountSubtitle: String,
-    logoutEnabled: Boolean,
-    dynamicColorEnabled: Boolean,
-    autoSyncEnabled: Boolean,
-    settingsEnabled: Boolean,
-    onDynamicColorEnabledChange: (Boolean) -> Unit,
-    onAutoSyncEnabledChange: (Boolean) -> Unit,
-    onLogout: () -> Unit,
-    onClearCache: () -> Unit,
-    onAbout: () -> Unit,
-    modifier: Modifier = Modifier,
-) {
-    Card(
-        modifier = modifier,
-        shape = RoundedCornerShape(28.dp),
-        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
-        elevation = CardDefaults.cardElevation(defaultElevation = 1.dp),
-    ) {
-        Column(
-            modifier = Modifier
-                .fillMaxSize()
-                .verticalScroll(rememberScrollState())
-                .padding(28.dp),
-            verticalArrangement = Arrangement.spacedBy(22.dp),
-        ) {
-            Row(
-                horizontalArrangement = Arrangement.spacedBy(12.dp),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                SectionIcon(symbol = selectedSection.symbol)
-                Text(
-                    text = selectedSection.title,
-                    color = MaterialTheme.colorScheme.onSurface,
-                    fontSize = 26.sp,
-                    fontWeight = FontWeight.SemiBold,
-                )
-            }
-            when (selectedSection) {
-                SettingsSection.Account -> AccountInfoContent(
-                    title = accountTitle,
-                    subtitle = accountSubtitle,
-                    logoutEnabled = logoutEnabled,
-                    onLogout = onLogout,
-                )
-                SettingsSection.Sync -> SyncSettingsContent(
-                    autoSyncEnabled = autoSyncEnabled,
-                    settingsEnabled = settingsEnabled,
-                    onAutoSyncEnabledChange = onAutoSyncEnabledChange,
-                )
-                SettingsSection.Appearance -> AppearanceSettingsContent(
-                    dynamicColorEnabled = dynamicColorEnabled,
-                    settingsEnabled = settingsEnabled,
-                    onDynamicColorEnabledChange = onDynamicColorEnabledChange,
-                )
-                SettingsSection.Storage -> StorageSettingsContent(
-                    onClearCache = onClearCache,
-                    onAbout = onAbout,
-                )
-            }
-        }
-    }
-}
-
-@Composable
-private fun SettingsHeader(onBack: () -> Unit) {
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(top = 4.dp),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        IconButton(
-            onClick = onBack,
-            modifier = Modifier.size(48.dp),
-        ) {
+        IconButton(onClick = onBack, modifier = Modifier.size(44.dp)) {
             ToreadSymbolIcon(
                 symbol = ToreadSymbols.ArrowBack,
                 contentDescription = ToreadStrings.BackToBookshelf,
@@ -463,325 +360,512 @@ private fun SettingsHeader(onBack: () -> Unit) {
                 autoMirror = true,
             )
         }
-        Spacer(modifier = Modifier.width(4.dp))
+        Spacer(modifier = Modifier.width(10.dp))
         Text(
-            text = ToreadStrings.Settings,
+            text = title,
             color = MaterialTheme.colorScheme.onBackground,
-            fontSize = 34.sp,
+            fontSize = 30.sp,
             fontWeight = FontWeight.Bold,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
         )
     }
 }
 
 @Composable
-private fun AccountInfoCard(
-    title: String,
-    subtitle: String,
-    logoutEnabled: Boolean,
-    onLogout: () -> Unit,
-) {
-    SettingsSectionCard(
-        title = ToreadStrings.AccountInfo,
-        symbol = ToreadSymbols.AccountCircle,
+private fun SettingsAccountRow(title: String, subtitle: String) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(vertical = 14.dp),
+        horizontalArrangement = Arrangement.spacedBy(16.dp),
+        verticalAlignment = Alignment.CenterVertically,
     ) {
-        AccountInfoContent(
-            title = title,
-            subtitle = subtitle,
-            logoutEnabled = logoutEnabled,
-            onLogout = onLogout,
-        )
-    }
-}
-
-@Composable
-private fun AccountInfoContent(
-    title: String,
-    subtitle: String,
-    logoutEnabled: Boolean,
-    onLogout: () -> Unit,
-) {
-    Column(verticalArrangement = Arrangement.spacedBy(18.dp)) {
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.spacedBy(16.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            SectionIcon(
-                symbol = ToreadSymbols.AccountCircle,
-                modifier = Modifier.size(72.dp),
-            )
-            Column(
-                modifier = Modifier.weight(1f),
-                verticalArrangement = Arrangement.spacedBy(4.dp),
-            ) {
-                Text(
-                    text = title,
-                    color = MaterialTheme.colorScheme.onSurface,
-                    fontSize = 24.sp,
-                    fontWeight = FontWeight.SemiBold,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                )
-                Text(
-                    text = subtitle,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    fontSize = 16.sp,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                )
-            }
-        }
-        OutlinedButton(
-            onClick = onLogout,
-            enabled = logoutEnabled,
+        Box(
             modifier = Modifier
-                .fillMaxWidth()
-                .height(48.dp),
-            shape = RoundedCornerShape(24.dp),
-            colors = ButtonDefaults.outlinedButtonColors(contentColor = MaterialTheme.colorScheme.primary),
+                .size(56.dp)
+                .clip(CircleShape)
+                .background(MaterialTheme.colorScheme.primaryContainer),
+            contentAlignment = Alignment.Center,
         ) {
             ToreadSymbolIcon(
-                symbol = ToreadSymbols.Logout,
+                symbol = ToreadSymbols.AccountCircle,
                 contentDescription = null,
-                modifier = Modifier.size(20.dp),
-                autoMirror = true,
+                tint = MaterialTheme.colorScheme.onPrimaryContainer,
+                modifier = Modifier.size(32.dp),
             )
-            Spacer(modifier = Modifier.width(10.dp))
-            Text(ToreadStrings.LogoutState, fontSize = 16.sp, fontWeight = FontWeight.Medium)
         }
-        Text(
-            text = ToreadStrings.LogoutLocalOnlyHint,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-            fontSize = 14.sp,
-        )
+        Column(
+            modifier = Modifier.weight(1f),
+            verticalArrangement = Arrangement.spacedBy(2.dp),
+        ) {
+            Text(
+                text = title,
+                color = MaterialTheme.colorScheme.onBackground,
+                fontSize = 18.sp,
+                fontWeight = FontWeight.SemiBold,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+            Text(
+                text = subtitle,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                fontSize = 14.sp,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+        }
     }
 }
 
+/** One section of the list: a muted label followed by its rows, without cards or dividers. */
 @Composable
-private fun SyncSettingsContent(
-    autoSyncEnabled: Boolean,
-    settingsEnabled: Boolean,
-    onAutoSyncEnabledChange: (Boolean) -> Unit,
-) {
-    SettingsSwitchRow(
-        title = ToreadStrings.AutoSync,
-        description = ToreadStrings.AutoSyncDescription,
-        checked = autoSyncEnabled,
-        enabled = settingsEnabled,
-        onCheckedChange = onAutoSyncEnabledChange,
-    )
-}
-
-@Composable
-private fun AppearanceSettingsContent(
-    dynamicColorEnabled: Boolean,
-    settingsEnabled: Boolean,
-    onDynamicColorEnabledChange: (Boolean) -> Unit,
-) {
-    SettingsSwitchRow(
-        title = ToreadStrings.DynamicColor,
-        description = ToreadStrings.DynamicColorDescription,
-        checked = dynamicColorEnabled,
-        enabled = settingsEnabled,
-        onCheckedChange = onDynamicColorEnabledChange,
-    )
-}
-
-@Composable
-private fun StorageSettingsContent(
-    onClearCache: () -> Unit,
-    onAbout: () -> Unit,
-) {
-    Column(verticalArrangement = Arrangement.spacedBy(0.dp)) {
-        SettingsActionRow(
-            symbol = ToreadSymbols.DeleteSweep,
-            title = ToreadStrings.ClearCache,
-            onClick = onClearCache,
-        )
-        SettingsDivider()
-        SettingsActionRow(
-            symbol = ToreadSymbols.Info,
-            title = ToreadStrings.About,
-            trailingText = ToreadStrings.Version100,
-            onClick = onAbout,
-        )
-    }
-}
-
-@Composable
-private fun SettingsSectionCard(
-    title: String,
-    symbol: DrawableResource,
+private fun SettingsGroup(
+    title: String? = null,
     content: @Composable ColumnScope.() -> Unit,
 ) {
-    Card(
-        modifier = Modifier
-            .widthIn(max = 760.dp)
-            .fillMaxWidth(),
-        shape = RoundedCornerShape(24.dp),
-        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
-        elevation = CardDefaults.cardElevation(defaultElevation = 2.dp),
-    ) {
-        Column(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(18.dp),
-            verticalArrangement = Arrangement.spacedBy(18.dp),
-        ) {
-            Row(
-                horizontalArrangement = Arrangement.spacedBy(12.dp),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                SectionIcon(symbol = symbol)
-                Text(
-                    text = title,
-                    color = MaterialTheme.colorScheme.onSurface,
-                    fontSize = 20.sp,
-                    fontWeight = FontWeight.SemiBold,
-                )
-            }
-            content()
+    Column(modifier = Modifier.fillMaxWidth()) {
+        if (title != null) {
+            Text(
+                text = title,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                fontSize = 14.sp,
+                fontWeight = FontWeight.Medium,
+                modifier = Modifier.padding(top = 20.dp, bottom = 6.dp),
+            )
+        } else {
+            HorizontalDivider(
+                modifier = Modifier.padding(top = 18.dp),
+                color = MaterialTheme.colorScheme.outlineVariant,
+            )
         }
+        content()
     }
 }
 
 @Composable
-private fun SectionIcon(
+private fun SettingsNavigationRow(
     symbol: DrawableResource,
-    modifier: Modifier = Modifier.size(40.dp),
+    title: String,
+    description: String? = null,
+    trailingText: String? = null,
+    enabled: Boolean = true,
+    onClick: () -> Unit,
 ) {
-    Box(
-        modifier = modifier
-            .clip(CircleShape)
-            .background(MaterialTheme.colorScheme.primaryContainer),
-        contentAlignment = Alignment.Center,
-    ) {
-        ToreadSymbolIcon(
-            symbol = symbol,
-            contentDescription = null,
-            tint = MaterialTheme.colorScheme.onPrimaryContainer,
-            modifier = Modifier.size(22.dp),
-        )
-    }
+    SettingsRow(
+        symbol = symbol,
+        enabled = enabled,
+        modifier = Modifier.clickable(enabled = enabled, onClick = onClick),
+        trailing = {
+            trailingText?.let {
+                Text(
+                    text = it,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    fontSize = 14.sp,
+                    maxLines = 1,
+                )
+            }
+            ToreadSymbolIcon(
+                symbol = ToreadSymbols.ChevronRight,
+                contentDescription = null,
+                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.size(22.dp),
+                autoMirror = true,
+            )
+        },
+        title = title,
+        description = description,
+    )
 }
 
 @Composable
 private fun SettingsSwitchRow(
+    symbol: DrawableResource,
     title: String,
     description: String,
     checked: Boolean,
     enabled: Boolean,
     onCheckedChange: (Boolean) -> Unit,
 ) {
+    SettingsRow(
+        symbol = symbol,
+        enabled = enabled,
+        modifier = Modifier.clickable(enabled = enabled) { onCheckedChange(!checked) },
+        trailing = {
+            Switch(
+                checked = checked,
+                onCheckedChange = onCheckedChange,
+                enabled = enabled,
+            )
+        },
+        title = title,
+        description = description,
+    )
+}
+
+@Composable
+private fun SettingsChoiceRow(
+    title: String,
+    selected: Boolean,
+    enabled: Boolean,
+    onClick: () -> Unit,
+) {
     Row(
-        modifier = Modifier.fillMaxWidth(),
-        horizontalArrangement = Arrangement.spacedBy(16.dp),
+        modifier = Modifier
+            .fillMaxWidth()
+            .height(SettingsRowMinHeight)
+            .clickable(enabled = enabled, onClick = onClick),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        Column(
+        Text(
+            text = title,
+            color = MaterialTheme.colorScheme.onSurface,
+            fontSize = 17.sp,
             modifier = Modifier.weight(1f),
-            verticalArrangement = Arrangement.spacedBy(4.dp),
-        ) {
-            Text(
-                text = title,
-                color = MaterialTheme.colorScheme.onSurface,
-                fontSize = 18.sp,
-                fontWeight = FontWeight.Medium,
-            )
-            Text(
-                text = description,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                fontSize = 14.sp,
-            )
-        }
-        Switch(
-            checked = checked,
-            onCheckedChange = onCheckedChange,
+        )
+        RadioButton(
+            selected = selected,
+            onClick = null,
             enabled = enabled,
+            colors = RadioButtonDefaults.colors(selectedColor = MaterialTheme.colorScheme.primary),
         )
     }
 }
 
 @Composable
-private fun SettingsInfoRow(
+private fun SettingsRow(
     symbol: DrawableResource,
+    enabled: Boolean,
+    modifier: Modifier,
+    trailing: @Composable () -> Unit,
     title: String,
-    trailingText: String,
-) {
-    SettingsBaseRow(symbol = symbol, title = title, trailingText = trailingText)
-}
-
-@Composable
-private fun SettingsActionRow(
-    symbol: DrawableResource,
-    title: String,
-    trailingText: String? = null,
-    onClick: () -> Unit,
-) {
-    SettingsBaseRow(
-        symbol = symbol,
-        title = title,
-        trailingText = trailingText,
-        modifier = Modifier.clickable(onClick = onClick),
-        showChevron = true,
-    )
-}
-
-@Composable
-private fun SettingsBaseRow(
-    symbol: DrawableResource,
-    title: String,
-    trailingText: String?,
-    modifier: Modifier = Modifier,
-    showChevron: Boolean = false,
+    description: String?,
 ) {
     Row(
         modifier = modifier
             .fillMaxWidth()
-            .height(48.dp),
-        horizontalArrangement = Arrangement.spacedBy(14.dp),
+            .padding(vertical = 12.dp),
+        horizontalArrangement = Arrangement.spacedBy(16.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         ToreadSymbolIcon(
             symbol = symbol,
             contentDescription = null,
-            tint = MaterialTheme.colorScheme.onSurfaceVariant,
-            modifier = Modifier.size(26.dp),
+            tint = if (enabled) {
+                MaterialTheme.colorScheme.onSurfaceVariant
+            } else {
+                MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.38f)
+            },
+            modifier = Modifier.size(24.dp),
         )
-        Text(
-            text = title,
-            color = MaterialTheme.colorScheme.onSurface,
-            fontSize = 17.sp,
-            fontWeight = FontWeight.Medium,
+        Column(
             modifier = Modifier.weight(1f),
-        )
-        trailingText?.let {
+            verticalArrangement = Arrangement.spacedBy(3.dp),
+        ) {
             Text(
-                text = it,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                fontSize = 15.sp,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
+                text = title,
+                color = if (enabled) {
+                    MaterialTheme.colorScheme.onSurface
+                } else {
+                    MaterialTheme.colorScheme.onSurface.copy(alpha = 0.38f)
+                },
+                fontSize = 17.sp,
             )
+            description?.let {
+                Text(
+                    text = it,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    fontSize = 13.sp,
+                )
+            }
         }
-        if (showChevron) {
-            ToreadSymbolIcon(
-                symbol = ToreadSymbols.ChevronRight,
-                contentDescription = null,
-                tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                modifier = Modifier.size(24.dp),
-                autoMirror = true,
+        trailing()
+    }
+}
+
+@Composable
+private fun ThemeModePicker(
+    selected: ToreadThemeMode,
+    enabled: Boolean,
+    palette: ToreadPalette,
+    onSelect: (ToreadThemeMode) -> Unit,
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(vertical = 8.dp),
+        horizontalArrangement = Arrangement.spacedBy(14.dp),
+    ) {
+        ToreadThemeMode.entries.forEach { mode ->
+            ThemeModeOption(
+                mode = mode,
+                palette = palette,
+                selected = mode == selected,
+                enabled = enabled,
+                onSelect = { onSelect(mode) },
+                modifier = Modifier.weight(1f),
             )
         }
     }
 }
 
 @Composable
-private fun SettingsDivider() {
+private fun ThemeModeOption(
+    mode: ToreadThemeMode,
+    palette: ToreadPalette,
+    selected: Boolean,
+    enabled: Boolean,
+    onSelect: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    Column(
+        modifier = modifier
+            .clip(RoundedCornerShape(16.dp))
+            .clickable(enabled = enabled, onClick = onSelect),
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.spacedBy(6.dp),
+    ) {
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .aspectRatio(0.74f)
+                .clip(RoundedCornerShape(14.dp))
+                .border(
+                    width = if (selected) 2.dp else 1.dp,
+                    color = if (selected) {
+                        MaterialTheme.colorScheme.primary
+                    } else {
+                        MaterialTheme.colorScheme.outlineVariant
+                    },
+                    shape = RoundedCornerShape(14.dp),
+                ),
+        ) {
+            if (mode == ToreadThemeMode.System) {
+                ThemeModePreview(palette = palette, darkTheme = false)
+                Box(
+                    modifier = Modifier
+                        .matchParentSize()
+                        .drawWithContent {
+                            val diagonal = Path().apply {
+                                moveTo(size.width, 0f)
+                                lineTo(size.width, size.height)
+                                lineTo(0f, size.height)
+                                close()
+                            }
+                            clipPath(diagonal) { this@drawWithContent.drawContent() }
+                        },
+                ) {
+                    ThemeModePreview(palette = palette, darkTheme = true)
+                }
+            } else {
+                ThemeModePreview(palette = palette, darkTheme = mode == ToreadThemeMode.Dark)
+            }
+        }
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(2.dp),
+        ) {
+            RadioButton(
+                selected = selected,
+                onClick = null,
+                enabled = enabled,
+                colors = RadioButtonDefaults.colors(
+                    selectedColor = MaterialTheme.colorScheme.primary,
+                ),
+            )
+            Text(
+                text = mode.label(),
+                color = MaterialTheme.colorScheme.onSurface,
+                fontSize = 14.sp,
+                textAlign = TextAlign.Center,
+            )
+        }
+    }
+}
+
+/** Miniature of the app painted with the scheme a mode would produce, used as the theme preview. */
+@Composable
+private fun ThemeModePreview(palette: ToreadPalette, darkTheme: Boolean) {
+    val scheme = remember(palette, darkTheme) {
+        toreadColorScheme(
+            palette = palette,
+            darkTheme = darkTheme,
+            highContrastDark = false,
+        )
+    }
     Box(
         modifier = Modifier
-            .fillMaxWidth()
-            .height(1.dp)
-            .background(MaterialTheme.colorScheme.outlineVariant),
+            .fillMaxSize()
+            .background(scheme.background),
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(7.dp),
+            verticalArrangement = Arrangement.spacedBy(5.dp),
+        ) {
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth(0.72f)
+                    .height(16.dp)
+                    .clip(RoundedCornerShape(4.dp))
+                    .background(scheme.primaryContainer),
+            )
+            PreviewLine(color = scheme.primary.copy(alpha = 0.85f), widthFraction = 0.86f)
+            PreviewLine(color = scheme.onSurfaceVariant.copy(alpha = 0.5f), widthFraction = 0.7f)
+            PreviewLine(color = scheme.onSurfaceVariant.copy(alpha = 0.5f), widthFraction = 0.5f)
+            Spacer(modifier = Modifier.weight(1f))
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(5.dp),
+            ) {
+                Box(
+                    modifier = Modifier
+                        .size(14.dp)
+                        .clip(CircleShape)
+                        .background(scheme.primary),
+                )
+                Box(
+                    modifier = Modifier
+                        .weight(1f)
+                        .height(12.dp)
+                        .clip(RoundedCornerShape(6.dp))
+                        .background(scheme.primaryContainer),
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun PreviewLine(color: Color, widthFraction: Float) {
+    Box(
+        modifier = Modifier
+            .fillMaxWidth(widthFraction)
+            .height(6.dp)
+            .clip(RoundedCornerShape(3.dp))
+            .background(color),
     )
+}
+
+/** Palette swatches: the light tone a palette produces next to the accent it paints with. */
+@Composable
+private fun PaletteGrid(
+    selected: ToreadPalette,
+    enabled: Boolean,
+    onSelect: (ToreadPalette) -> Unit,
+) {
+    Column(
+        modifier = Modifier.padding(top = 4.dp),
+        verticalArrangement = Arrangement.spacedBy(12.dp),
+    ) {
+        ToreadPalette.entries.chunked(4).forEach { row ->
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(12.dp),
+            ) {
+                row.forEach { palette ->
+                    PaletteSwatch(
+                        palette = palette,
+                        selected = palette == selected,
+                        enabled = enabled,
+                        onSelect = { onSelect(palette) },
+                        modifier = Modifier.weight(1f),
+                    )
+                }
+                repeat(4 - row.size) {
+                    Spacer(modifier = Modifier.weight(1f))
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun PaletteSwatch(
+    palette: ToreadPalette,
+    selected: Boolean,
+    enabled: Boolean,
+    onSelect: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val (lightTone, darkTone) = remember(palette) { paletteSwatchColors(palette) }
+    Column(
+        modifier = modifier
+            .clip(RoundedCornerShape(18.dp))
+            .clickable(enabled = enabled, onClick = onSelect),
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.spacedBy(6.dp),
+    ) {
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .aspectRatio(1f)
+                .clip(RoundedCornerShape(18.dp))
+                .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.55f))
+                .then(
+                    if (selected) {
+                        Modifier.border(
+                            width = 2.dp,
+                            color = MaterialTheme.colorScheme.primary,
+                            shape = RoundedCornerShape(18.dp),
+                        )
+                    } else {
+                        Modifier
+                    },
+                ),
+            contentAlignment = Alignment.Center,
+        ) {
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth(0.62f)
+                    .aspectRatio(1f),
+                contentAlignment = Alignment.Center,
+            ) {
+                Canvas(modifier = Modifier.fillMaxSize()) {
+                    drawCircle(color = lightTone)
+                    // Right half in the accent tone, so one swatch shows both ends of the palette.
+                    drawArc(
+                        color = darkTone,
+                        startAngle = -90f,
+                        sweepAngle = 180f,
+                        useCenter = true,
+                    )
+                }
+            }
+        }
+        Text(
+            text = palette.label(),
+            color = if (selected) {
+                MaterialTheme.colorScheme.primary
+            } else {
+                MaterialTheme.colorScheme.onSurfaceVariant
+            },
+            fontSize = 12.sp,
+            fontWeight = if (selected) FontWeight.Medium else FontWeight.Normal,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+        )
+    }
+}
+
+internal fun ToreadThemeMode.label(): String = when (this) {
+    ToreadThemeMode.Light -> ToreadStrings.ThemeModeLight
+    ToreadThemeMode.Dark -> ToreadStrings.ThemeModeDark
+    ToreadThemeMode.System -> ToreadStrings.ThemeModeSystem
+}
+
+internal fun ToreadPalette.label(): String = when (this) {
+    ToreadPalette.Indigo -> ToreadStrings.PaletteIndigo
+    ToreadPalette.Green -> ToreadStrings.PaletteGreen
+    ToreadPalette.Teal -> ToreadStrings.PaletteTeal
+    ToreadPalette.Cyan -> ToreadStrings.PaletteCyan
+    ToreadPalette.Sky -> ToreadStrings.PaletteSky
+    ToreadPalette.Violet -> ToreadStrings.PaletteViolet
+    ToreadPalette.Purple -> ToreadStrings.PalettePurple
+    ToreadPalette.Pink -> ToreadStrings.PalettePink
+    ToreadPalette.Peach -> ToreadStrings.PalettePeach
+    ToreadPalette.Orange -> ToreadStrings.PaletteOrange
+    ToreadPalette.Amber -> ToreadStrings.PaletteAmber
+    ToreadPalette.Slate -> ToreadStrings.PaletteSlate
 }

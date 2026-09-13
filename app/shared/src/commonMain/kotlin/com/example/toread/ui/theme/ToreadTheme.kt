@@ -6,10 +6,12 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.darkColorScheme
 import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.Immutable
 import androidx.compose.runtime.ReadOnlyComposable
 import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.ui.graphics.Color
+import com.example.toread.settings.ToreadPalette
 
 private val ToreadLightColorScheme = lightColorScheme(
     primary = Color(0xFF4E5F9F),
@@ -77,6 +79,8 @@ internal data class ToreadExtraColors(
     val readerPage: Color,
     val readerDivider: Color,
     val readerScrim: Color,
+    val readerNightPage: Color,
+    val readerNightText: Color,
     val readChapter: Color,
     val currentChapter: Color,
     val unreadChapter: Color,
@@ -95,6 +99,8 @@ private val LightExtraColors = ToreadExtraColors(
     readerPage = Color(0xFFFFFBFF),
     readerDivider = Color(0xFFD8D4DE),
     readerScrim = Color.Black.copy(alpha = 0.42f),
+    readerNightPage = Color(0xFF0F1214),
+    readerNightText = Color(0xFFE4EAF0),
     readChapter = Color(0xFF8B8792),
     currentChapter = Color(0xFF8A6218),
     unreadChapter = Color(0xFF24232A),
@@ -113,6 +119,8 @@ private val DarkExtraColors = ToreadExtraColors(
     readerPage = Color(0xFF171A1F),
     readerDivider = Color(0xFF30343B),
     readerScrim = Color.Black.copy(alpha = 0.55f),
+    readerNightPage = Color(0xFF0F1214),
+    readerNightText = Color(0xFFE4EAF0),
     readChapter = Color(0xFF747985),
     currentChapter = Color(0xFFD8B66A),
     unreadChapter = Color(0xFFE4E8EE),
@@ -124,6 +132,20 @@ private val DarkExtraColors = ToreadExtraColors(
     txtCoverEnd = Color(0xFFBFA6D6),
 )
 
+/**
+ * High-contrast dark: the reading surface goes to true black so an AMOLED panel can switch those
+ * pixels off, and the chrome keeps a quiet edge against it.
+ */
+private val HighContrastDarkExtraColors = DarkExtraColors.copy(
+    readerPage = Color(0xFF000000),
+    readerDivider = Color(0xFF2A2A2A),
+    readerScrim = Color.Black.copy(alpha = 0.72f),
+    readerNightPage = Color(0xFF000000),
+    readerNightText = Color(0xFFFFFFFF),
+    readChapter = Color(0xFF9A9A9A),
+    unreadChapter = Color(0xFFFFFFFF),
+)
+
 internal val LocalToreadExtraColors = staticCompositionLocalOf { LightExtraColors }
 
 internal val MaterialTheme.toreadColors: ToreadExtraColors
@@ -131,20 +153,46 @@ internal val MaterialTheme.toreadColors: ToreadExtraColors
     @ReadOnlyComposable
     get() = LocalToreadExtraColors.current
 
+/**
+ * Whether the theme currently in scope is dark. Reader surfaces read this to follow the app theme
+ * while their day/night switch is still on 跟随系统, without re-resolving the theme mode themselves.
+ */
+internal val LocalToreadDarkTheme = staticCompositionLocalOf { false }
+
+internal val MaterialTheme.toreadIsDark: Boolean
+    @Composable
+    @ReadOnlyComposable
+    get() = LocalToreadDarkTheme.current
+
 @Composable
 internal fun ToreadTheme(
     useDynamicColor: Boolean,
     darkTheme: Boolean = isSystemInDarkTheme(),
+    palette: ToreadPalette = ToreadPalette.Indigo,
+    highContrastDark: Boolean = false,
     content: @Composable () -> Unit,
 ) {
     val colorScheme = if (useDynamicColor) {
         platformDynamicColorScheme(darkTheme)
     } else {
         null
-    } ?: toreadColorScheme(darkTheme)
-    val extraColors = if (darkTheme) DarkExtraColors else LightExtraColors
+    } ?: toreadColorScheme(
+        palette = palette,
+        darkTheme = darkTheme,
+        highContrastDark = highContrastDark,
+    )
+    val extraColors = if (darkTheme && highContrastDark) {
+        HighContrastDarkExtraColors
+    } else if (darkTheme) {
+        DarkExtraColors
+    } else {
+        LightExtraColors
+    }
 
-    androidx.compose.runtime.CompositionLocalProvider(LocalToreadExtraColors provides extraColors) {
+    CompositionLocalProvider(
+        LocalToreadExtraColors provides extraColors,
+        LocalToreadDarkTheme provides darkTheme,
+    ) {
         MaterialTheme(
             colorScheme = colorScheme,
             content = content,
@@ -152,5 +200,66 @@ internal fun ToreadTheme(
     }
 }
 
-private fun toreadColorScheme(darkTheme: Boolean): ColorScheme =
-    if (darkTheme) ToreadDarkColorScheme else ToreadLightColorScheme
+/**
+ * The scheme the app paints with. The brand palette keeps the hand-tuned scheme; every other palette
+ * only replaces the accent and neutral-tint roles, so the surfaces M3 components expect keep their
+ * tuned values. High-contrast dark then drops the dark scheme onto true black.
+ */
+internal fun toreadColorScheme(
+    palette: ToreadPalette,
+    darkTheme: Boolean,
+    highContrastDark: Boolean,
+): ColorScheme {
+    val base = if (darkTheme) ToreadDarkColorScheme else ToreadLightColorScheme
+    val roles = paletteRoles(palette = palette, darkTheme = darkTheme)
+    val accent = if (roles == null) {
+        base
+    } else {
+        base.copy(
+            primary = roles.primary,
+            onPrimary = roles.onPrimary,
+            primaryContainer = roles.primaryContainer,
+            onPrimaryContainer = roles.onPrimaryContainer,
+            secondary = roles.secondary,
+            onSecondary = roles.onSecondary,
+            secondaryContainer = roles.secondaryContainer,
+            onSecondaryContainer = roles.onSecondaryContainer,
+            tertiary = roles.tertiary,
+            onTertiary = roles.onTertiary,
+            tertiaryContainer = roles.tertiaryContainer,
+            onTertiaryContainer = roles.onTertiaryContainer,
+            background = roles.background,
+            onBackground = roles.onBackground,
+            surface = roles.surface,
+            onSurface = roles.onSurface,
+            surfaceVariant = roles.surfaceVariant,
+            onSurfaceVariant = roles.onSurfaceVariant,
+            surfaceContainerLowest = roles.surfaceContainerLowest,
+            surfaceContainerLow = roles.surfaceContainerLow,
+            surfaceContainer = roles.surfaceContainer,
+            surfaceContainerHigh = roles.surfaceContainerHigh,
+            surfaceContainerHighest = roles.surfaceContainerHighest,
+            outline = roles.outline,
+            outlineVariant = roles.outlineVariant,
+        )
+    }
+    if (!darkTheme || !highContrastDark) return accent
+    // Pure black saves power on AMOLED panels; surfaces stay a hair above it so cards keep an edge.
+    return accent.copy(
+        background = Color(0xFF000000),
+        onBackground = Color(0xFFFFFFFF),
+        surface = Color(0xFF0A0A0A),
+        onSurface = Color(0xFFFFFFFF),
+        surfaceVariant = Color(0xFF1C1C1C),
+        onSurfaceVariant = Color(0xFFD6D6D6),
+        surfaceContainerLowest = Color(0xFF000000),
+        surfaceContainerLow = Color(0xFF060606),
+        surfaceContainer = Color(0xFF0A0A0A),
+        surfaceContainerHigh = Color(0xFF111111),
+        surfaceContainerHighest = Color(0xFF161616),
+        outline = Color(0xFF8F8F8F),
+        outlineVariant = Color(0xFF3A3A3A),
+        inverseSurface = Color(0xFFFFFFFF),
+        inverseOnSurface = Color(0xFF000000),
+    )
+}

@@ -757,7 +757,11 @@ internal fun AndroidReaderLayout(
                         end = 24.dp,
                         bottom = readerBottomPadding,
                     ),
-                textColor = if (nightMode) ReaderNightText else MaterialTheme.colorScheme.onBackground,
+                textColor = if (nightMode) {
+                    MaterialTheme.toreadColors.readerNightText
+                } else {
+                    MaterialTheme.colorScheme.onBackground
+                },
                 bodyFontSize = typography.bodyFontSize,
                 bodyLineHeight = typography.bodyLineHeight,
                 bodyLetterSpacing = typography.bodyLetterSpacing,
@@ -765,7 +769,10 @@ internal fun AndroidReaderLayout(
         }
 
         if (controlsVisible) {
-            AndroidReaderTopBar(book = book, onBack = onBack)
+            // The top bar belongs to the reading surface too, so it follows the reader's own switch.
+            ToreadTheme(useDynamicColor = false, darkTheme = nightMode) {
+                AndroidReaderTopBar(book = book, onBack = onBack)
+            }
             AndroidReaderBottomPanel(
                 progress = progress,
                 chapterPages = chapterPages,
@@ -823,6 +830,9 @@ private fun AndroidReaderTopBar(book: BookshelfBook, onBack: () -> Unit) {
             maxLines = 1,
             overflow = TextOverflow.Ellipsis,
             modifier = Modifier.weight(1f),
+            // Explicit: this bar may sit in the reader's night theme while the app theme is light, and
+            // the inherited content color would still come from the app theme.
+            color = MaterialTheme.colorScheme.onSurface,
             style = MaterialTheme.typography.titleMedium,
         )
     }
@@ -869,13 +879,23 @@ private fun BoxScope.AndroidReaderBottomPanel(
 
     ToreadTheme(useDynamicColor = false, darkTheme = nightMode) {
         Card(
+            // Flush with the screen edges: only the top corners are rounded and the system bar inset is
+            // paid inside the card, so no background shows through around the panel.
+            shape = RoundedCornerShape(
+                topStart = ReaderSheetCornerRadius,
+                topEnd = ReaderSheetCornerRadius,
+            ),
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(start = 12.dp, top = 12.dp, end = 12.dp, bottom = bottomInset + 12.dp)
                 .align(Alignment.BottomCenter),
         ) {
             Column(
-                modifier = Modifier.padding(horizontal = 18.dp, vertical = 16.dp),
+                modifier = Modifier.padding(
+                    start = 18.dp,
+                    top = 16.dp,
+                    end = 18.dp,
+                    bottom = bottomInset + 16.dp,
+                ),
                 verticalArrangement = Arrangement.spacedBy(16.dp),
             ) {
                 Row(
@@ -1080,6 +1100,11 @@ private fun BoxScope.AndroidChapterDrawer(
             .clickable(onClick = onDismiss),
     )
     Card(
+        // Same shape rule as the reading panel: rounded top corners, flush with the other edges.
+        shape = RoundedCornerShape(
+            topStart = ReaderSheetCornerRadius,
+            topEnd = ReaderSheetCornerRadius,
+        ),
         modifier = Modifier
             .align(Alignment.BottomCenter)
             .fillMaxWidth()

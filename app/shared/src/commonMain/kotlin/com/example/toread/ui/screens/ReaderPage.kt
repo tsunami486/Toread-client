@@ -55,17 +55,20 @@ import com.example.toread.ui.components.ScreenColumn
 import com.example.toread.ui.reader.AndroidReaderLayout
 import com.example.toread.ui.reader.DesktopReaderLayout
 import com.example.toread.ui.reader.ReaderMessage
+import com.example.toread.ui.reader.ReaderNightModeConfirmDialog
 import com.example.toread.ui.reader.ReaderPageSlice
 import com.example.toread.ui.reader.ReaderProgressRemoteSyncPolicy
+import com.example.toread.ui.reader.chapterPagePosition
 import com.example.toread.ui.reader.normalizePageIndex
+import com.example.toread.ui.reader.pageIndexForChapterPage
 import com.example.toread.ui.reader.pageProgress
 import com.example.toread.ui.reader.paginateForReader
+import com.example.toread.ui.reader.rememberReaderNightModeState
 import com.example.toread.ui.reader.rememberReaderPaginationSpec
 import com.example.toread.ui.reader.saveReaderProgress
 import com.example.toread.ui.reader.toPageIndex
-import com.example.toread.ui.reader.ReaderNightBackground
-import com.example.toread.ui.reader.chapterPagePosition
-import com.example.toread.ui.reader.pageIndexForChapterPage
+import com.example.toread.ui.theme.toreadColors
+import com.example.toread.ui.theme.toreadIsDark
 import com.example.toread.ui.text.ToreadStrings
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
@@ -144,8 +147,14 @@ internal fun ReaderPage(
     var paginationComplete by remember(book?.bookHash) { mutableStateOf(false) }
     var desktopReaderFocusReady by remember(book?.bookHash) { mutableStateOf(false) }
     var hasUserNavigated by remember(book?.bookHash) { mutableStateOf(false) }
-    var nightMode by remember(book?.bookHash) {
-        mutableStateOf(settingsRepository?.readerNightModeEnabled() ?: false)
+    val nightModeState = rememberReaderNightModeState(
+        settingsRepository = settingsRepository,
+        bookKey = book?.bookHash.orEmpty(),
+    )
+    val nightMode = if (nightModeState.followsSystem) {
+        MaterialTheme.toreadIsDark
+    } else {
+        nightModeState.manualNightMode
     }
     var desktopDoublePageEnabled by remember(book?.bookHash) { mutableStateOf(true) }
     var desktopNightModeEnabled by remember(book?.bookHash) { mutableStateOf(true) }
@@ -259,7 +268,11 @@ internal fun ReaderPage(
 
     Box(
         modifier = readerModifier.background(
-            if (nightMode) ReaderNightBackground else MaterialTheme.colorScheme.background,
+            if (nightMode) {
+                MaterialTheme.toreadColors.readerNightPage
+            } else {
+                MaterialTheme.colorScheme.background
+            },
         ),
     ) {
         when {
@@ -570,15 +583,19 @@ internal fun ReaderPage(
                                     ?.let(::goToPage)
                             },
                             nightMode = nightMode,
-                            onToggleNightMode = {
-                                nightMode = !nightMode
-                                settingsRepository?.setReaderNightModeEnabled(nightMode)
-                            },
+                            onToggleNightMode = nightModeState::toggle,
                         )
                     }
                 }
             }
         }
+    }
+
+    if (nightModeState.isConfirmingManualSwitch) {
+        ReaderNightModeConfirmDialog(
+            onConfirm = { nightModeState.confirmManualSwitch(nightMode = !nightMode) },
+            onDismiss = nightModeState::dismissManualSwitch,
+        )
     }
 }
 

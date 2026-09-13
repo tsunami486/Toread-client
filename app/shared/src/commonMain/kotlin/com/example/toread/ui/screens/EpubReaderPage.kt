@@ -47,10 +47,13 @@ import com.example.toread.ui.reader.EpubReflowState
 import com.example.toread.ui.reader.ReaderChapterEntry
 import com.example.toread.ui.reader.ReaderChapterPagePosition
 import com.example.toread.ui.reader.ReaderMessage
-import com.example.toread.ui.reader.ReaderNightBackground
+import com.example.toread.ui.reader.ReaderNightModeConfirmDialog
 import com.example.toread.ui.reader.ReaderProgressRemoteSyncPolicy
+import com.example.toread.ui.reader.rememberReaderNightModeState
 import com.example.toread.ui.reader.rememberReaderPaginationSpec
 import com.example.toread.ui.reader.saveEpubReaderProgress
+import com.example.toread.ui.theme.toreadColors
+import com.example.toread.ui.theme.toreadIsDark
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -95,8 +98,14 @@ internal fun EpubReaderPage(
     var error by remember(book.bookHash) { mutableStateOf<String?>(null) }
     var controlsVisible by remember(book.bookHash) { mutableStateOf(false) }
     var hasUserNavigated by remember(book.bookHash) { mutableStateOf(false) }
-    var nightMode by remember(book.bookHash) {
-        mutableStateOf(settingsRepository?.readerNightModeEnabled() ?: false)
+    val nightModeState = rememberReaderNightModeState(
+        settingsRepository = settingsRepository,
+        bookKey = book.bookHash,
+    )
+    val nightMode = if (nightModeState.followsSystem) {
+        MaterialTheme.toreadIsDark
+    } else {
+        nightModeState.manualNightMode
     }
     var desktopDoublePageEnabled by remember(book.bookHash) { mutableStateOf(true) }
     var desktopNightModeEnabled by remember(book.bookHash) { mutableStateOf(true) }
@@ -213,7 +222,11 @@ internal fun EpubReaderPage(
         modifier = Modifier
             .fillMaxSize()
             .background(
-                if (nightMode) ReaderNightBackground else MaterialTheme.colorScheme.background,
+                if (nightMode) {
+                    MaterialTheme.toreadColors.readerNightPage
+                } else {
+                    MaterialTheme.colorScheme.background
+                },
             ),
     ) {
         val currentPublication = publication
@@ -426,14 +439,18 @@ internal fun EpubReaderPage(
                                 navigate { jumpToChapterPage(chapterPage) }
                             },
                             nightMode = nightMode,
-                            onToggleNightMode = {
-                                nightMode = !nightMode
-                                settingsRepository?.setReaderNightModeEnabled(nightMode)
-                            },
+                            onToggleNightMode = nightModeState::toggle,
                         )
                     }
                 }
             }
         }
+    }
+
+    if (nightModeState.isConfirmingManualSwitch) {
+        ReaderNightModeConfirmDialog(
+            onConfirm = { nightModeState.confirmManualSwitch(nightMode = !nightMode) },
+            onDismiss = nightModeState::dismissManualSwitch,
+        )
     }
 }

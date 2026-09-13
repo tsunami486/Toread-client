@@ -42,6 +42,45 @@ class LocalSettingsRepositoryTest {
     }
 
     @Test
+    fun appearancePreferencesDefaultToFollowingTheSystemAndRoundTrip() {
+        val repository = testRepository()
+
+        val defaults = repository.appearancePreferences()
+        assertEquals(ToreadThemeMode.System, defaults.themeMode)
+        assertEquals(false, defaults.dynamicColorEnabled)
+        assertEquals(ToreadPalette.Indigo, defaults.palette)
+        assertEquals(false, defaults.highContrastDarkTheme)
+        assertEquals(true, defaults.readerNightModeFollowSystem)
+
+        val chosen = ToreadAppearancePreferences(
+            themeMode = ToreadThemeMode.Dark,
+            dynamicColorEnabled = true,
+            palette = ToreadPalette.Teal,
+            highContrastDarkTheme = true,
+            readerNightModeFollowSystem = false,
+        )
+        repository.setAppearancePreferences(chosen)
+        assertEquals(chosen, repository.appearancePreferences())
+
+        // The reader stores the same follow-system flag through its own confirmation dialog.
+        repository.setReaderNightModeFollowSystem(true)
+        assertEquals(true, repository.appearancePreferences().readerNightModeFollowSystem)
+    }
+
+    @Test
+    fun appearanceChangesLeaveUnrelatedSettingsAlone() {
+        val repository = testRepository()
+
+        repository.setAutoSyncEnabled(false)
+        repository.setAppearancePreferences(
+            ToreadAppearancePreferences(themeMode = ToreadThemeMode.Light),
+        )
+
+        assertEquals(false, repository.autoSyncEnabled())
+        assertEquals(ToreadThemeMode.Light, repository.appearancePreferences().themeMode)
+    }
+
+    @Test
     fun pdfPreferencesUseSafeDefaultsWhenNoSettingsExist() {
         val repository = testRepository()
 
