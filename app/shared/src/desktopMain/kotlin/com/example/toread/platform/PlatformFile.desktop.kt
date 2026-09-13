@@ -16,15 +16,24 @@ actual class PlatformFilePicker actual constructor() {
         }
 
         return dialog.files.orEmpty().map { file ->
-            val path = file.toPath()
-            PlatformFile(
-                displayName = file.name,
-                path = path.toAbsolutePath().toString(),
-                mimeType = runCatching { Files.probeContentType(path) }.getOrNull(),
-                sizeBytes = runCatching { Files.size(path) }.getOrNull(),
-            )
+            platformFileFromPath(file.toPath().toAbsolutePath().toString())
         }
     }
+}
+
+/**
+ * Describes a local file for the importer. Shared by the file picker and the drag-and-drop target so a
+ * dropped file arrives with exactly the same name, MIME type and size a picked one does.
+ */
+internal fun platformFileFromPath(path: String): PlatformFile {
+    val resolved = runCatching { Paths.get(path).toAbsolutePath() }.getOrNull()
+    return PlatformFile(
+        displayName = resolved?.fileName?.toString()
+            ?: path.substringAfterLast('\\').substringAfterLast('/'),
+        path = resolved?.toString() ?: path,
+        mimeType = resolved?.let { runCatching { Files.probeContentType(it) }.getOrNull() },
+        sizeBytes = resolved?.let { runCatching { Files.size(it) }.getOrNull() },
+    )
 }
 
 actual class SecureTokenStore actual constructor() {

@@ -56,7 +56,12 @@ import toread.client.app.shared.generated.resources.Res
 import toread.client.app.shared.generated.resources.illustration_import_books
 
 @Composable
-internal fun ImportPage(importService: BookImportService?, onImported: () -> Unit, onBack: () -> Unit) {
+internal fun ImportPage(
+    importService: BookImportService?,
+    onImported: () -> Unit,
+    onBack: () -> Unit,
+    supportsFileDrop: Boolean = false,
+) {
     val scope = rememberCoroutineScope()
     var state by remember { mutableStateOf<ImportUiState>(ImportUiState.Waiting) }
     val colors = importPageColors()
@@ -113,6 +118,7 @@ internal fun ImportPage(importService: BookImportService?, onImported: () -> Uni
                 importEnabled = importService != null,
                 onChooseFile = ::beginImport,
                 colors = colors,
+                supportsFileDrop = supportsFileDrop,
             )
             ImportStatusCard(
                 state = state,
@@ -170,6 +176,7 @@ private fun ImportActionCard(
     importEnabled: Boolean,
     onChooseFile: () -> Unit,
     colors: ImportPageColors,
+    supportsFileDrop: Boolean,
 ) {
     ImportCard(colors = colors) {
         Column(
@@ -209,7 +216,11 @@ private fun ImportActionCard(
                 colors = colors,
             )
             Text(
-                text = ToreadStrings.ImportChooseHint,
+                text = if (supportsFileDrop) {
+                    ToreadStrings.ImportChooseDropHint
+                } else {
+                    ToreadStrings.ImportChooseHint
+                },
                 color = colors.textSecondary,
                 fontSize = 14.sp,
                 maxLines = 2,

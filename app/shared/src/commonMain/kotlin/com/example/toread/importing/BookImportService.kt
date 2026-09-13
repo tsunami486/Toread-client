@@ -13,7 +13,11 @@ import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
 
-private val supportedExtensions = setOf("epub", "pdf", "txt")
+/**
+ * File extensions the importer accepts. The desktop drag-and-drop target filters dropped files with
+ * the same set, and [validateImportFile] stays the authority once a file reaches the importer.
+ */
+internal val supportedBookExtensions: Set<String> = setOf("epub", "pdf", "txt")
 
 class BookImportService(
     private val database: ToreadDatabase,
@@ -25,7 +29,7 @@ class BookImportService(
     private val clock: ImportClock = PlatformImportClock(),
 ) {
     suspend fun importSelectedFiles(): List<BookImportResult> =
-        importFiles(filePicker.pickFiles(supportedExtensions.toList()))
+        importFiles(filePicker.pickFiles(supportedBookExtensions.toList()))
 
     suspend fun importFiles(files: List<PlatformFile>): List<BookImportResult> =
         files.map { file -> importFile(file) }
@@ -137,7 +141,7 @@ private fun validateImportFile(file: PlatformFile): ImportFileValidation {
     val extension = file.extension()
         ?: return ImportFileValidation.Invalid("缺少文件扩展名")
 
-    if (extension !in supportedExtensions) {
+    if (extension !in supportedBookExtensions) {
         return ImportFileValidation.Invalid("暂不支持 .$extension 文件")
     }
 

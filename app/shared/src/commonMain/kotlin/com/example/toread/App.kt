@@ -34,8 +34,11 @@ import com.example.toread.auth.AuthClient
 import com.example.toread.auth.AuthClientResult
 import com.example.toread.auth.isConfirmedInvalidRefreshToken
 import com.example.toread.config.ServerBaseUrlConfig
+import com.example.toread.importing.BookImportResult
 import com.example.toread.importing.BookImportService
 import com.example.toread.importing.createToreadDatabase
+import com.example.toread.importing.droppedBookFiles
+import com.example.toread.importing.droppedImportMessage
 import com.example.toread.library.BookshelfBook
 import com.example.toread.library.BookshelfRepository
 import com.example.toread.logging.ToreadClientLog
@@ -44,6 +47,7 @@ import com.example.toread.network.ServerConnectionState
 import com.example.toread.progress.ApplyProgressResult
 import com.example.toread.progress.ReadingProgressRepository
 import com.example.toread.platform.AppBackgroundNotifier
+import com.example.toread.platform.PlatformFile
 import com.example.toread.platform.SecureTokenStore
 import com.example.toread.reader.ReaderContentLoader
 import com.example.toread.settings.AuthMode
@@ -63,6 +67,8 @@ import com.example.toread.ui.screens.CheckingAuthPage
 import com.example.toread.ui.screens.ImportPage
 import com.example.toread.ui.screens.ReaderPage
 import com.example.toread.ui.screens.SettingsPage
+import com.example.toread.ui.components.BookDropOverlay
+import com.example.toread.ui.components.bookFileDropTarget
 import com.example.toread.ui.text.ToreadStrings
 import com.example.toread.ui.theme.ToreadTheme
 import kotlinx.coroutines.flow.collect
@@ -693,6 +699,51 @@ fun ToreadApp() {
     val isReaderScreen = screen == ToreadScreen.Reader
     val isBookshelfScreen = screen == ToreadScreen.Bookshelf
 
+    // Drag-and-drop import: the desktop shell accepts books dropped from the file manager while the
+    // library screens are open. The drop runs through the same import service the picker uses.
+    var bookDropActive by remember { mutableStateOf(false) }
+    var bookDropImporting by remember { mutableStateOf(false) }
+    var bookDropFileCount by remember { mutableIntStateOf(0) }
+    val bookDropEnabled = platform.kind == PlatformKind.Desktop &&
+        importService != null &&
+        (isBookshelfScreen || screen == ToreadScreen.Import)
+
+    fun importDroppedBooks(droppedFiles: List<PlatformFile>) {
+        val service = importService
+        if (service == null) {
+            showAppMessage(ToreadStrings.ImportServiceUnavailable)
+            return
+        }
+        val books = droppedFiles.droppedBookFiles()
+        val skipped = droppedFiles.size - books.size
+        if (books.isEmpty()) {
+            showAppMessage(ToreadStrings.droppedUnsupportedFiles(skipped))
+            return
+        }
+
+        bookDropImporting = true
+        appScope.launch {
+            val results = runCatching { service.importFiles(books) }
+            bookDropImporting = false
+            val message = results.fold(
+                onSuccess = { droppedImportMessage(it, skippedCount = skipped) },
+                onFailure = { error ->
+                    ToreadStrings.importFailed(
+                        ToreadStrings.safeUserVisibleMessage(
+                            error.message,
+                            fallback = ToreadStrings.ImportFailedGeneric,
+                        ),
+                    )
+                },
+            )
+            if (results.getOrNull()?.any { it is BookImportResult.Imported } == true) {
+                progressSyncScheduler.requestFlush()
+                refreshKey++
+            }
+            showAppMessage(message)
+        }
+    }
+
     ToreadTheme(
         useDynamicColor = appearance.dynamicColorEnabled,
         darkTheme = appearance.themeMode.isDark(isSystemInDarkTheme()),
@@ -702,10 +753,25 @@ fun ToreadApp() {
         Surface(
             modifier = Modifier
                 .fillMaxSize()
+                // Ahead of the content padding, so a book can be released anywhere in the window and
+                // not only inside the margins non-bookshelf screens keep.
+                .bookFileDropTarget(
+                    enabled = bookDropEnabled,
+                    onFilesDropped = { files ->
+                        bookDropActive = false
+                        bookDropFileCount = files.size
+                        importDroppedBooks(files)
+                    },
+                    onDragActiveChange = { active ->
+                        bookDropActive = active && bookDropEnabled
+                    },
+                )
                 .background(MaterialTheme.colorScheme.background)
                 .then(appContentPadding(platform.kind, isReaderScreen, isBookshelfScreen)),
         ) {
-            Box(modifier = Modifier.fillMaxSize()) {
+            Box(
+                modifier = Modifier.fillMaxSize(),
+            ) {
                 Box(
                     modifier = Modifier
                         .fillMaxSize(),
@@ -770,6 +836,7 @@ fun ToreadApp() {
                         )
                         ToreadScreen.Import -> ImportPage(
                             importService = importService,
+                            supportsFileDrop = platform.kind == PlatformKind.Desktop,
                             onImported = {
                                 progressSyncScheduler.requestFlush()
                                 refreshKey++
@@ -852,6 +919,12 @@ fun ToreadApp() {
                         .align(Alignment.BottomCenter)
                         .padding(16.dp),
                 )
+                if (bookDropActive || bookDropImporting) {
+                    BookDropOverlay(
+                        isImporting = bookDropImporting,
+                        fileCount = bookDropFileCount,
+                    )
+                }
             }
         }
     }

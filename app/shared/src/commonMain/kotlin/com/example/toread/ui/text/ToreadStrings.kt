@@ -164,6 +164,7 @@ object ToreadStrings {
     const val ImportChooseTitle = "选择本地书籍文件"
     const val ImportChooseDescription = "支持 EPUB、PDF、TXT等常见电子书格式"
     const val ImportChooseHint = "也可从其他app分享文件到本应用"
+    const val ImportChooseDropHint = "也可以把 EPUB / PDF / TXT 文件直接拖入窗口，一次可拖入多个"
     const val ImportWaitingTitle = "等待选择文件"
     const val ImportWaitingDescription = "请选择一个本地电子书文件。"
     const val ImportingTitle = "正在导入本地书籍"
@@ -197,6 +198,15 @@ object ToreadStrings {
             if (duplicates > 0) append("，已在书架中：$duplicates")
             if (failed > 0) append("，失败：$failed。")
         }
+
+    // Desktop drag-and-drop import
+    const val DropBooksTitle = "松开即可导入"
+    const val DropBooksDescription = "支持 EPUB、PDF、TXT，可一次拖入多个文件。"
+    const val DropBooksImporting = "正在导入拖入的书籍…"
+    fun dropBooksCount(count: Int): String = "松开即可导入这 $count 个文件（支持 EPUB、PDF、TXT）。"
+    fun droppedUnsupportedFiles(count: Int): String = "已忽略 $count 个非 EPUB/PDF/TXT 文件。"
+    fun importDropFailed(reason: String, count: Int): String =
+        if (count <= 1) "拖入的文件导入失败：$reason" else "拖入的 $count 个文件导入失败：$reason"
 
     fun unsupportedFileExtension(extension: String): String =
         "不支持的文件类型：$extension"
@@ -261,7 +271,7 @@ object ToreadStrings {
     fun openBookFailed(reason: String?): String = failedWithReason("打开失败", reason)
     fun readChapterSummary(read: Int, total: Int): String = "已读 $read / 共 $total 章"
     fun chapterPage(index: Int): String = "第 ${index + 1} 页"
-    fun chapterPageProgress(pageNumber: Int, pageCount: Int): String = "当前章节 $pageNumber / $pageCount 页"
+    fun chapterPageProgress(pageNumber: Int, pageCount: Int): String = " $pageNumber / $pageCount "
     fun pagePosition(index: Int, total: Int): String = "${index + 1} / $total"
     fun pdfPageRange(pageIndices: List<Int>, total: Int): String {
         val first = pageIndices.minOrNull() ?: 0
