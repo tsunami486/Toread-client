@@ -704,6 +704,7 @@ internal fun AndroidReaderLayout(
     onSeekChapterPage: ((Int) -> Unit)? = null,
     nightMode: Boolean = false,
     onToggleNightMode: (() -> Unit)? = null,
+    readerSurface: ReaderSurfaceColors = ReaderSurfaceColors.Day,
 ) {
     val typography = AndroidReaderTypography
     val systemBarInsets = rememberSystemBarInsets()
@@ -757,11 +758,7 @@ internal fun AndroidReaderLayout(
                         end = 24.dp,
                         bottom = readerBottomPadding,
                     ),
-                textColor = if (nightMode) {
-                    MaterialTheme.toreadColors.readerNightText
-                } else {
-                    MaterialTheme.colorScheme.onBackground
-                },
+                textColor = readerSurface.text,
                 bodyFontSize = typography.bodyFontSize,
                 bodyLineHeight = typography.bodyLineHeight,
                 bodyLetterSpacing = typography.bodyLetterSpacing,

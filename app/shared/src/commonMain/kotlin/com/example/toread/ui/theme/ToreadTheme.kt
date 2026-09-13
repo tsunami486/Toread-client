@@ -79,8 +79,6 @@ internal data class ToreadExtraColors(
     val readerPage: Color,
     val readerDivider: Color,
     val readerScrim: Color,
-    val readerNightPage: Color,
-    val readerNightText: Color,
     val readChapter: Color,
     val currentChapter: Color,
     val unreadChapter: Color,
@@ -99,8 +97,6 @@ private val LightExtraColors = ToreadExtraColors(
     readerPage = Color(0xFFFFFBFF),
     readerDivider = Color(0xFFD8D4DE),
     readerScrim = Color.Black.copy(alpha = 0.42f),
-    readerNightPage = Color(0xFF0F1214),
-    readerNightText = Color(0xFFE4EAF0),
     readChapter = Color(0xFF8B8792),
     currentChapter = Color(0xFF8A6218),
     unreadChapter = Color(0xFF24232A),
@@ -119,8 +115,6 @@ private val DarkExtraColors = ToreadExtraColors(
     readerPage = Color(0xFF171A1F),
     readerDivider = Color(0xFF30343B),
     readerScrim = Color.Black.copy(alpha = 0.55f),
-    readerNightPage = Color(0xFF0F1214),
-    readerNightText = Color(0xFFE4EAF0),
     readChapter = Color(0xFF747985),
     currentChapter = Color(0xFFD8B66A),
     unreadChapter = Color(0xFFE4E8EE),
@@ -133,15 +127,13 @@ private val DarkExtraColors = ToreadExtraColors(
 )
 
 /**
- * High-contrast dark: the reading surface goes to true black so an AMOLED panel can switch those
- * pixels off, and the chrome keeps a quiet edge against it.
+ * High-contrast dark: the chrome goes to true black so an AMOLED panel can switch those pixels off.
+ * The reading surface's own black comes from `ReaderSurfaceColors.NightHighContrast`.
  */
 private val HighContrastDarkExtraColors = DarkExtraColors.copy(
     readerPage = Color(0xFF000000),
     readerDivider = Color(0xFF2A2A2A),
     readerScrim = Color.Black.copy(alpha = 0.72f),
-    readerNightPage = Color(0xFF000000),
-    readerNightText = Color(0xFFFFFFFF),
     readChapter = Color(0xFF9A9A9A),
     unreadChapter = Color(0xFFFFFFFF),
 )

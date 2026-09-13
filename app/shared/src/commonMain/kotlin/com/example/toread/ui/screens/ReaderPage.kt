@@ -65,9 +65,9 @@ import com.example.toread.ui.reader.pageProgress
 import com.example.toread.ui.reader.paginateForReader
 import com.example.toread.ui.reader.rememberReaderNightModeState
 import com.example.toread.ui.reader.rememberReaderPaginationSpec
+import com.example.toread.ui.reader.readerSurfaceColors
 import com.example.toread.ui.reader.saveReaderProgress
 import com.example.toread.ui.reader.toPageIndex
-import com.example.toread.ui.theme.toreadColors
 import com.example.toread.ui.theme.toreadIsDark
 import com.example.toread.ui.text.ToreadStrings
 import kotlinx.coroutines.CancellationException
@@ -156,6 +156,14 @@ internal fun ReaderPage(
     } else {
         nightModeState.manualNightMode
     }
+    // The reading surface paints itself from this, so day/night also switches the paper under the text.
+    val highContrastDarkTheme = remember(book?.bookHash) {
+        settingsRepository?.appearancePreferences()?.highContrastDarkTheme ?: false
+    }
+    val readerSurface = readerSurfaceColors(
+        nightMode = nightMode,
+        highContrastDark = highContrastDarkTheme,
+    )
     var desktopDoublePageEnabled by remember(book?.bookHash) { mutableStateOf(true) }
     var desktopNightModeEnabled by remember(book?.bookHash) { mutableStateOf(true) }
     val focusRequester = remember { FocusRequester() }
@@ -267,13 +275,7 @@ internal fun ReaderPage(
         .fillMaxSize()
 
     Box(
-        modifier = readerModifier.background(
-            if (nightMode) {
-                MaterialTheme.toreadColors.readerNightPage
-            } else {
-                MaterialTheme.colorScheme.background
-            },
-        ),
+        modifier = readerModifier.background(readerSurface.background),
     ) {
         when {
             error != null -> ReaderMessage(message = error.orEmpty(), onBack = ::exitReaderWithoutProgress)
@@ -584,6 +586,7 @@ internal fun ReaderPage(
                             },
                             nightMode = nightMode,
                             onToggleNightMode = nightModeState::toggle,
+                            readerSurface = readerSurface,
                         )
                     }
                 }

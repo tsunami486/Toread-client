@@ -51,8 +51,8 @@ import com.example.toread.ui.reader.ReaderNightModeConfirmDialog
 import com.example.toread.ui.reader.ReaderProgressRemoteSyncPolicy
 import com.example.toread.ui.reader.rememberReaderNightModeState
 import com.example.toread.ui.reader.rememberReaderPaginationSpec
+import com.example.toread.ui.reader.readerSurfaceColors
 import com.example.toread.ui.reader.saveEpubReaderProgress
-import com.example.toread.ui.theme.toreadColors
 import com.example.toread.ui.theme.toreadIsDark
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
@@ -107,6 +107,14 @@ internal fun EpubReaderPage(
     } else {
         nightModeState.manualNightMode
     }
+    // The reading surface paints itself from this, so day/night also switches the paper under the text.
+    val highContrastDarkTheme = remember(book.bookHash) {
+        settingsRepository?.appearancePreferences()?.highContrastDarkTheme ?: false
+    }
+    val readerSurface = readerSurfaceColors(
+        nightMode = nightMode,
+        highContrastDark = highContrastDarkTheme,
+    )
     var desktopDoublePageEnabled by remember(book.bookHash) { mutableStateOf(true) }
     var desktopNightModeEnabled by remember(book.bookHash) { mutableStateOf(true) }
     var desktopReaderFocusReady by remember(book.bookHash) { mutableStateOf(false) }
@@ -221,13 +229,7 @@ internal fun EpubReaderPage(
     Box(
         modifier = Modifier
             .fillMaxSize()
-            .background(
-                if (nightMode) {
-                    MaterialTheme.toreadColors.readerNightPage
-                } else {
-                    MaterialTheme.colorScheme.background
-                },
-            ),
+            .background(readerSurface.background),
     ) {
         val currentPublication = publication
         val currentSession = session
@@ -440,6 +442,7 @@ internal fun EpubReaderPage(
                             },
                             nightMode = nightMode,
                             onToggleNightMode = nightModeState::toggle,
+                            readerSurface = readerSurface,
                         )
                     }
                 }
