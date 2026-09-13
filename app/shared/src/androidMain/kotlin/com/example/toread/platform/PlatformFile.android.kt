@@ -71,6 +71,33 @@ actual class BookFileStorage actual constructor() {
             sizeBytes = destination.length(),
         )
     }
+
+    actual suspend fun copyCoverToBookDirectory(
+        file: PlatformFile,
+        bookHash: String,
+        extension: String,
+    ): String? {
+        val inputStream = AndroidFileAccessBridge.openInputStream?.invoke(file) ?: return null
+        val bookDirectory = File(AndroidAppContext.applicationContext.filesDir, "books/$bookHash")
+        return runCatching {
+            bookDirectory.mkdirs()
+            val destination = File(bookDirectory, "cover.$extension")
+            inputStream.use { input ->
+                destination.outputStream().use { output -> input.copyTo(output) }
+            }
+            destination.absolutePath
+        }.getOrNull()
+    }
+
+    actual suspend fun deleteBookDirectory(bookHash: String, bookFilePath: String) {
+        val booksRoot = File(AndroidAppContext.applicationContext.filesDir, "books")
+        val directory = File(booksRoot, bookHash)
+        runCatching {
+            // Only ever delete inside the app's own books root, and only the book's own directory.
+            if (directory.canonicalFile.parentFile != booksRoot.canonicalFile) return
+            directory.deleteRecursively()
+        }
+    }
 }
 
 actual class CoverImageBytesLoader actual constructor() {

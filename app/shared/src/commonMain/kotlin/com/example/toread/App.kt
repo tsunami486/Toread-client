@@ -12,11 +12,13 @@ import androidx.compose.foundation.layout.union
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
@@ -41,6 +43,8 @@ import com.example.toread.importing.droppedBookFiles
 import com.example.toread.importing.droppedImportMessage
 import com.example.toread.library.BookshelfBook
 import com.example.toread.library.BookshelfRepository
+import com.example.toread.library.prunedPinOrder
+import com.example.toread.library.toggledPinOrder
 import com.example.toread.logging.ToreadClientLog
 import com.example.toread.network.ServerConnectionMonitor
 import com.example.toread.network.ServerConnectionState
@@ -61,6 +65,7 @@ import com.example.toread.sync.RemoteProgressFetchResult
 import com.example.toread.sync.SyncRunSummary
 import com.example.toread.sync.SyncQueueProcessor
 import com.example.toread.ui.screens.AuthPage
+import com.example.toread.ui.screens.BookInfoPage
 import com.example.toread.ui.screens.BookshelfLayoutMode
 import com.example.toread.ui.screens.BookshelfPage
 import com.example.toread.ui.screens.CheckingAuthPage
@@ -82,6 +87,7 @@ internal enum class ToreadScreen {
     Auth,
     Bookshelf,
     Import,
+    BookInfo,
     Reader,
     Settings,
 }
@@ -126,6 +132,9 @@ fun ToreadApp() {
     var scheduledAuthRefreshRetry by remember { mutableStateOf(false) }
     var authRefreshRetryAttempt by remember { mutableIntStateOf(0) }
     var appearance by remember { mutableStateOf(ToreadAppearancePreferences()) }
+    // Shelf pinning is a device-level arrangement: the hashes live in the settings, newest pin first.
+    var pinnedBookHashes by remember { mutableStateOf<List<String>>(emptyList()) }
+    var bookPendingDelete by remember { mutableStateOf<BookshelfBook?>(null) }
     val autoSyncEnabledState = remember { mutableStateOf(true) }
     var autoSyncEnabled by autoSyncEnabledState
     var bookshelfLayoutMode by remember { mutableStateOf(BookshelfLayoutMode.Grid) }
@@ -612,6 +621,7 @@ fun ToreadApp() {
     LaunchedEffect(settingsRepository) {
         val repository = settingsRepository
         appearance = repository?.appearancePreferences() ?: ToreadAppearancePreferences()
+        pinnedBookHashes = repository?.pinnedBookHashes().orEmpty()
         val storedAutoSyncEnabled = repository?.autoSyncEnabled() ?: true
         autoSyncEnabled = storedAutoSyncEnabled
         bookshelfLayoutMode = BookshelfLayoutMode.fromStoredValue(repository?.bookshelfLayoutMode())
@@ -708,8 +718,35 @@ fun ToreadApp() {
         importService != null &&
         (isBookshelfScreen || screen == ToreadScreen.Import)
 
-    fun importDroppedBooks(droppedFiles: List<PlatformFile>) {
-        val service = importService
+    fun togglePinnedBook(book: BookshelfBook) {
+        val updated = toggledPinOrder(pinnedBookHashes, book.bookHash)
+        pinnedBookHashes = updated
+        settingsRepository?.setPinnedBookHashes(updated)
+    }
+
+    fun deleteBook(book: BookshelfBook) {
+        val repository = bookshelfRepository
+        bookPendingDelete = null
+        appScope.launch {
+            val deleted = repository != null &&
+                runCatching { repository.deleteBookLocally(book.bookHash) }.getOrDefault(false)
+            if (!deleted) {
+                showAppMessage(ToreadStrings.DeleteBookFailed)
+                return@launch
+            }
+            val remaining = books.filterNot { it.bookHash == book.bookHash }
+            val prunedPins = prunedPinOrder(pinnedBookHashes, remaining)
+            if (prunedPins != pinnedBookHashes) {
+                pinnedBookHashes = prunedPins
+                settingsRepository?.setPinnedBookHashes(prunedPins)
+            }
+            if (selectedBook?.bookHash == book.bookHash) selectedBook = null
+            refreshKey++
+            showAppMessage(ToreadStrings.DeleteBookDone)
+        }
+    }
+
+    fun importDroppedBooks(droppedFiles: List<PlatformFile>) {        val service = importService
         if (service == null) {
             showAppMessage(ToreadStrings.ImportServiceUnavailable)
             return
@@ -826,6 +863,13 @@ fun ToreadApp() {
                                 settingsRepository?.setBookshelfLayoutMode(mode.storedValue)
                             },
                             onImport = { screen = ToreadScreen.Import },
+                            pinnedBookHashes = pinnedBookHashes,
+                            onTogglePin = { book -> togglePinnedBook(book) },
+                            onEditBookInfo = { book ->
+                                selectedBook = book
+                                screen = ToreadScreen.BookInfo
+                            },
+                            onDeleteBook = { book -> bookPendingDelete = book },
                             onOpenBook = { book ->
                                 selectedBook = book
                                 screen = ToreadScreen.Reader
@@ -833,6 +877,20 @@ fun ToreadApp() {
                             onSettings = { screen = ToreadScreen.Settings },
                             onSync = { runSyncAndRefresh() },
                             isRefreshing = syncRunning,
+                        )
+                        ToreadScreen.BookInfo -> BookInfoPage(
+                            book = selectedBook,
+                            bookshelfRepository = bookshelfRepository,
+                            onSaved = {
+                                refreshKey++
+                                screen = ToreadScreen.Bookshelf
+                                showAppMessage(ToreadStrings.BookInfoSaved)
+                            },
+                            onDelete = { book -> bookPendingDelete = book },
+                            onBack = {
+                                refreshKey++
+                                screen = ToreadScreen.Bookshelf
+                            },
                         )
                         ToreadScreen.Import -> ImportPage(
                             importService = importService,
@@ -926,6 +984,27 @@ fun ToreadApp() {
                     )
                 }
             }
+        }
+
+        bookPendingDelete?.let { target ->
+            AlertDialog(
+                onDismissRequest = { bookPendingDelete = null },
+                title = { Text(ToreadStrings.DeleteBookTitle) },
+                text = { Text(ToreadStrings.deleteBookMessage(target.title)) },
+                confirmButton = {
+                    TextButton(onClick = { deleteBook(target) }) {
+                        Text(
+                            text = ToreadStrings.DeleteBookConfirm,
+                            color = MaterialTheme.colorScheme.error,
+                        )
+                    }
+                },
+                dismissButton = {
+                    TextButton(onClick = { bookPendingDelete = null }) {
+                        Text(ToreadStrings.DialogCancel)
+                    }
+                },
+            )
         }
     }
 }

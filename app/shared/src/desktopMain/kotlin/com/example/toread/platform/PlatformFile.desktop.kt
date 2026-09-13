@@ -121,7 +121,7 @@ actual class BookFileStorage actual constructor() {
     ): StoredBookFile {
         val source = file.path?.let { Paths.get(it) }
             ?: error("Desktop file path is required for copying.")
-        val bookDirectory = Paths.get(System.getProperty("user.home"), ".toread", "books", bookHash)
+        val bookDirectory = bookDirectory(bookHash)
         Files.createDirectories(bookDirectory)
         val destination = bookDirectory.resolve("original.$extension")
         Files.copy(source, destination, java.nio.file.StandardCopyOption.REPLACE_EXISTING)
@@ -131,6 +131,47 @@ actual class BookFileStorage actual constructor() {
             sizeBytes = Files.size(destination),
         )
     }
+
+    actual suspend fun copyCoverToBookDirectory(
+        file: PlatformFile,
+        bookHash: String,
+        extension: String,
+    ): String? {
+        val source = resolveFilePathForCopy(file) ?: return null
+        val destination = bookDirectory(bookHash).resolve("cover.$extension")
+        return runCatching {
+            Files.createDirectories(destination.parent)
+            Files.copy(source, destination, java.nio.file.StandardCopyOption.REPLACE_EXISTING)
+            destination.toAbsolutePath().toString()
+        }.getOrNull()
+    }
+
+    actual suspend fun deleteBookDirectory(bookHash: String, bookFilePath: String) {
+        val root = booksRoot()
+        val directory = bookDirectory(bookHash)
+        runCatching {
+            // Only ever delete inside the app's own books root, and only the book's own directory.
+            val normalizedRoot = root.toAbsolutePath().normalize()
+            val normalizedDirectory = directory.toAbsolutePath().normalize()
+            if (normalizedDirectory.parent != normalizedRoot) return
+            Files.walk(normalizedDirectory).use { paths ->
+                paths.sorted(Comparator.reverseOrder()).forEach { Files.deleteIfExists(it) }
+            }
+        }
+        // A book file that somehow lives outside the private directory is left on disk on purpose.
+    }
+}
+
+private fun booksRoot(): Path =
+    Paths.get(System.getProperty("user.home"), ".toread", "books")
+
+private fun bookDirectory(bookHash: String): Path = booksRoot().resolve(bookHash)
+
+private fun resolveFilePathForCopy(file: PlatformFile): Path? {
+    file.path?.let { raw ->
+        resolveLocalFilePath(raw)?.let { return it }
+    }
+    return file.uri?.let { uri -> runCatching { Paths.get(URI(uri)) }.getOrNull() }
 }
 
 actual class CoverImageBytesLoader actual constructor() {

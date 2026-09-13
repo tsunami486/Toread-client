@@ -211,6 +211,63 @@ object ToreadStrings {
     fun unsupportedFileExtension(extension: String): String =
         "不支持的文件类型：$extension"
 
+    // Bookshelf book menu and book info editing
+    const val PinBook = "置顶"
+    const val UnpinBook = "取消置顶"
+    const val EditBookInfo = "修改信息"
+    const val DeleteBook = "删除"
+    const val PinnedBadgeDescription = "已置顶"
+    const val DeleteBookTitle = "删除这本书？"
+    fun deleteBookMessage(title: String): String =
+        "《$title》将从本机书架移除，本地副本、阅读进度与笔记都会删除；服务器上的记录不受影响。"
+    const val DeleteBookConfirm = "删除"
+    const val DeleteBookDone = "已从书架移除。"
+    const val DeleteBookFailed = "删除失败，请重试。"
+    const val BookInfoTitle = "编辑书籍信息"
+    const val BookInfoSave = "保存更改"
+    const val BookInfoSaveShort = "保存"
+    const val Saving = "保存中…"
+    const val SavingShort = "保存中"
+    const val BookInfoSaved = "已保存书籍信息。"
+    const val BookInfoSaveFailed = "保存失败，请检查书名后重试。"
+    const val BookInfoTitleLabel = "书名"
+    const val BookInfoAuthorLabel = "作者"
+    const val BookInfoTagsLabel = "分类 / 标签"
+    const val BookInfoTagsPlaceholder = "用逗号分隔，例如：悬疑, 仙侠, 连载"
+    const val BookInfoNotesLabel = "自定义备注 / 简介"
+    const val BookInfoNotesPlaceholder = "可在此记录个人阅读备注或粘贴书籍简介…"
+    const val BookInfoTitlePlaceholder = "输入书名"
+    const val BookInfoAuthorPlaceholder = "输入作者"
+    const val BookInfoCoverHint = "更换封面"
+    const val BookInfoCoverPick = "相册选取"
+    const val BookInfoCoverUpload = "本地图片上传"
+    const val BookInfoCoverGenerated = "使用内置文字封面"
+    const val BookInfoCoverGeneratedShort = "生成纯色封面"
+    const val BookInfoCoverFormats = "支持 JPG、PNG、WebP"
+    const val BookInfoCoverFailed = "封面读取失败，请换一张图片。"
+    const val BookInfoMetaTitle = "文件信息"
+    const val BookInfoMetaFormat = "文件格式"
+    const val BookInfoMetaPath = "本地路径"
+    const val BookInfoMetaSize = "文件大小"
+    const val BookInfoUnknownValue = "未知"
+    const val DeleteBookRemoveTitle = "从书架移除书籍"
+    const val DeleteBookRemoveDescription = "移除后将删除本地副本、阅读进度与修改数据；服务器上的记录不受影响。"
+    const val DeleteBookRemoveAction = "移出书架"
+    const val DeleteBookRemoveActionLong = "从书架移除该书籍"
+    const val Bookshelf = "书架"
+
+    fun bookFileSizeLabel(bytes: Long): String = when {
+        bytes <= 0L -> "未知"
+        bytes < 1024L -> "$bytes B"
+        bytes < 1024L * 1024L -> "${bytes / 1024L} KB"
+        else -> {
+            val megabytes = bytes.toDouble() / (1024.0 * 1024.0)
+            val rounded = kotlin.math.round(megabytes * 10.0) / 10.0
+            "$rounded MB"
+        }
+    }
+    const val DeleteBookMenuDescription = "删除这本书"
+
     // Reader
     const val SelectBookBeforeReading = "请先从书架打开一本书。"
     const val UnsupportedReadableFormat = "当前格式暂不能直接阅读。"

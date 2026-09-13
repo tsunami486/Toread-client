@@ -38,11 +38,13 @@ internal object ToreadSymbols {
     val KeyboardArrowUp = Res.drawable.material_symbol_rounded_keyboard_arrow_up
     val KeyboardDoubleArrowLeft = Res.drawable.material_symbol_rounded_keyboard_double_arrow_left
     val KeyboardDoubleArrowRight = Res.drawable.material_symbol_rounded_keyboard_double_arrow_right
+    val Keep = Res.drawable.material_symbol_rounded_keep
     val LightMode = Res.drawable.material_symbol_rounded_light_mode
     val Logout = Res.drawable.material_symbol_rounded_logout
     val Menu = Res.drawable.material_symbol_rounded_menu
     val MenuBook = Res.drawable.material_symbol_rounded_menu_book
     val Palette = Res.drawable.material_symbol_rounded_palette
+    val PhotoCamera = Res.drawable.material_symbol_rounded_photo_camera
     val Refresh = Res.drawable.material_symbol_rounded_refresh
     val Remove = Res.drawable.material_symbol_rounded_remove
     val Search = Res.drawable.material_symbol_rounded_search

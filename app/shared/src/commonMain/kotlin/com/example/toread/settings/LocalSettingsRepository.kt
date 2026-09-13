@@ -92,6 +92,25 @@ class LocalSettingsRepository(
         saveSetting(ReaderNightFollowSystemKey, enabled.toString())
     }
 
+    /**
+     * Books pinned to the front of the shelf, most recently pinned first. Device-level: pinning is a
+     * shelf arrangement on this device and is never synced.
+     */
+    fun pinnedBookHashes(): List<String> =
+        readSetting(PinnedBooksKey)
+            ?.split('\n')
+            ?.map(String::trim)
+            ?.filter { it.isNotBlank() }
+            ?.distinct()
+            .orEmpty()
+
+    fun setPinnedBookHashes(bookHashes: List<String>) {
+        saveSetting(
+            PinnedBooksKey,
+            bookHashes.map(String::trim).filter { it.isNotBlank() }.distinct().joinToString("\n"),
+        )
+    }
+
     fun androidPdfReaderPreferences(): AndroidPdfReaderPreferences =
         AndroidPdfReaderPreferences(
             landscapeDoublePageEnabled = readBooleanSetting(
@@ -307,6 +326,7 @@ class LocalSettingsRepository(
         const val ThemeHighContrastDarkKey = "theme.high_contrast_dark"
         const val ReaderNightModeKey = "reader.night_mode_enabled"
         const val ReaderNightFollowSystemKey = "reader.night_mode_follow_system"
+        const val PinnedBooksKey = "bookshelf.pinned_hashes"
         const val PdfAndroidLandscapeDoublePageKey =
             "reader.pdf.android.landscape_double_page_enabled"
         const val PdfAndroidVolumeKeysKey = "reader.pdf.android.volume_keys_enabled"

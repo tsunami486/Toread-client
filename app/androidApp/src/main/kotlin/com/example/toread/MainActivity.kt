@@ -126,6 +126,9 @@ class MainActivity : ComponentActivity() {
                 "epub" -> listOf("application/epub+zip", "application/x-epub+zip")
                 "pdf" -> listOf("application/pdf")
                 "txt" -> listOf("text/plain")
+                "jpg", "jpeg" -> listOf("image/jpeg")
+                "png" -> listOf("image/png")
+                "webp" -> listOf("image/webp")
                 else -> emptyList()
             }
         }.distinct()

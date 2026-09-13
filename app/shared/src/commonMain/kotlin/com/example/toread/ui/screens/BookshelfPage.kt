@@ -5,6 +5,7 @@ import androidx.compose.foundation.LocalIndication
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.hoverable
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.collectIsFocusedAsState
@@ -62,6 +63,8 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.sp
 import com.example.toread.library.BookshelfBook
+import com.example.toread.library.withPinnedFirst
+import com.example.toread.ui.components.bookContextMenuGesture
 import com.example.toread.platform.CoverImageBytesLoader
 import com.example.toread.reader.EpubLocator
 import com.example.toread.reader.PdfLocator
@@ -118,8 +121,12 @@ internal fun BookshelfPage(
     isDesktop: Boolean = false,
     layoutMode: BookshelfLayoutMode = BookshelfLayoutMode.Grid,
     onLayoutModeChange: (BookshelfLayoutMode) -> Unit = {},
+    pinnedBookHashes: List<String> = emptyList(),
     onImport: () -> Unit,
     onOpenBook: (BookshelfBook) -> Unit,
+    onTogglePin: (BookshelfBook) -> Unit = {},
+    onEditBookInfo: (BookshelfBook) -> Unit = {},
+    onDeleteBook: (BookshelfBook) -> Unit = {},
     onSettings: () -> Unit,
     onSync: () -> Unit = {},
     isRefreshing: Boolean = false,
@@ -131,7 +138,7 @@ internal fun BookshelfPage(
     val pendingSyncCount = books.count { it.syncStatus.isPendingSync() }
     val failedSyncCount = books.count { it.syncStatus.normalizedSyncStatus() == "failed" }
     val continueBook = remember(books) { selectContinueReadingBook(books) }
-    val visibleBooks = remember(books, query, selectedFilter, selectedSortMode) {
+    val visibleBooks = remember(books, query, selectedFilter, selectedSortMode, pinnedBookHashes) {
         val keyword = query.trim()
         books
             .asSequence()
@@ -144,6 +151,8 @@ internal fun BookshelfPage(
             }
             .sortedByMode(selectedSortMode)
             .toList()
+            // Pinned books lead whatever ordering the shelf is using.
+            .withPinnedFirst(pinnedBookHashes)
     }
 
     BoxWithConstraints(
@@ -218,6 +227,7 @@ internal fun BookshelfPage(
                             ContinueReadingSection(
                                 book = book,
                                 readerContentLoader = readerContentLoader,
+                                isPinned = book.bookHash in pinnedBookHashes,
                                 onOpenBook = onOpenBook,
                             )
                         }
@@ -257,6 +267,12 @@ internal fun BookshelfPage(
                                 BookCard(
                                     book = book,
                                     enableHover = isDesktop,
+                                    isPinned = book.bookHash in pinnedBookHashes,
+                                    menuActions = BookshelfBookMenuActions(
+                                        onTogglePin = { onTogglePin(book) },
+                                        onEditInfo = { onEditBookInfo(book) },
+                                        onDelete = { onDeleteBook(book) },
+                                    ),
                                     onOpenBook = onOpenBook,
                                 )
                             }
@@ -275,6 +291,12 @@ internal fun BookshelfPage(
                             GridBookCard(
                                 book = book,
                                 enableHover = isDesktop,
+                                isPinned = book.bookHash in pinnedBookHashes,
+                                menuActions = BookshelfBookMenuActions(
+                                    onTogglePin = { onTogglePin(book) },
+                                    onEditInfo = { onEditBookInfo(book) },
+                                    onDelete = { onDeleteBook(book) },
+                                ),
                                 onOpenBook = onOpenBook,
                             )
                         }
@@ -460,6 +482,7 @@ private fun BookshelfSearchBox(
 private fun ContinueReadingSection(
     book: BookshelfBook,
     readerContentLoader: ReaderContentLoader?,
+    isPinned: Boolean,
     onOpenBook: (BookshelfBook) -> Unit,
 ) {
     val epubLocator = book.locator as? EpubLocator
@@ -519,6 +542,7 @@ private fun ContinueReadingSection(
                     BookCover(
                         book = book,
                         showSyncBadge = true,
+                        isPinned = isPinned,
                         modifier = Modifier
                             .fillMaxHeight()
                             .aspectRatio(ListBookCoverAspectRatio),
@@ -813,6 +837,8 @@ private fun AddBookListCard(onImport: () -> Unit) {
 private fun BookCard(
     book: BookshelfBook,
     enableHover: Boolean,
+    isPinned: Boolean,
+    menuActions: BookshelfBookMenuActions,
     onOpenBook: (BookshelfBook) -> Unit,
 ) {
     val interactionSource = remember { MutableInteractionSource() }
@@ -820,6 +846,7 @@ private fun BookCard(
     val isFocused by interactionSource.collectIsFocusedAsState()
     val isHighlighted = (enableHover && isHovered) || isFocused
     val useCompactTextLayout = LocalDensity.current.fontScale >= 1.3f
+    var menuExpanded by remember { mutableStateOf(false) }
     Card(
         modifier = Modifier
             .fillMaxWidth()
@@ -834,15 +861,24 @@ private fun BookCard(
         ),
         elevation = CardDefaults.cardElevation(defaultElevation = if (isHighlighted) 4.dp else 2.dp),
     ) {
+        BookContextMenu(
+            expanded = menuExpanded,
+            isPinned = isPinned,
+            actions = menuActions,
+            onDismiss = { menuExpanded = false },
+        )
         Row(
             modifier = Modifier
                 .fillMaxWidth()
                 .fillMaxHeight()
                 .hoverable(interactionSource = interactionSource, enabled = enableHover)
-                .clickable(
+                .bookContextMenuGesture(enabled = true) { menuExpanded = true }
+                .combinedClickable(
                     interactionSource = interactionSource,
                     indication = LocalIndication.current,
                     onClick = { onOpenBook(book) },
+                    onLongClick = { menuExpanded = true },
+                    onLongClickLabel = ToreadStrings.EditBookInfo,
                 )
                 .padding(14.dp),
             horizontalArrangement = Arrangement.spacedBy(16.dp),
@@ -851,6 +887,7 @@ private fun BookCard(
             BookCover(
                 book = book,
                 showSyncBadge = true,
+                isPinned = isPinned,
                 modifier = Modifier
                     .fillMaxHeight()
                     .aspectRatio(ListBookCoverAspectRatio),
@@ -897,12 +934,15 @@ private fun BookCard(
 private fun GridBookCard(
     book: BookshelfBook,
     enableHover: Boolean,
+    isPinned: Boolean,
+    menuActions: BookshelfBookMenuActions,
     onOpenBook: (BookshelfBook) -> Unit,
 ) {
     val interactionSource = remember { MutableInteractionSource() }
     val isHovered by interactionSource.collectIsHoveredAsState()
     val isFocused by interactionSource.collectIsFocusedAsState()
     val isHighlighted = (enableHover && isHovered) || isFocused
+    var menuExpanded by remember { mutableStateOf(false) }
     Column(
         modifier = Modifier
             .fillMaxWidth()
@@ -915,17 +955,27 @@ private fun GridBookCard(
                 },
             )
             .hoverable(interactionSource = interactionSource, enabled = enableHover)
-            .clickable(
+            .bookContextMenuGesture(enabled = true) { menuExpanded = true }
+            .combinedClickable(
                 interactionSource = interactionSource,
                 indication = LocalIndication.current,
                 onClick = { onOpenBook(book) },
+                onLongClick = { menuExpanded = true },
+                onLongClickLabel = ToreadStrings.EditBookInfo,
             )
             .padding(6.dp),
         verticalArrangement = Arrangement.spacedBy(7.dp),
     ) {
+        BookContextMenu(
+            expanded = menuExpanded,
+            isPinned = isPinned,
+            actions = menuActions,
+            onDismiss = { menuExpanded = false },
+        )
         BookCover(
             book = book,
             showSyncBadge = true,
+            isPinned = isPinned,
             modifier = Modifier
                 .fillMaxWidth()
                 .aspectRatio(0.72f),
@@ -976,12 +1026,13 @@ private fun AddBookGridCard(onImport: () -> Unit) {
 }
 
 @Composable
-private fun BookCover(
+internal fun BookCover(
     book: BookshelfBook,
     modifier: Modifier = Modifier
         .width(72.dp)
         .height(104.dp),
     showSyncBadge: Boolean = false,
+    isPinned: Boolean = false,
 ) {
     val format = book.format.uppercase()
     val fallbackPresentation = remember(book.title, book.format, book.bookHash) {
@@ -1069,6 +1120,13 @@ private fun BookCover(
                 Text(format, color = Color.White.copy(alpha = 0.85f), fontSize = 12.sp, letterSpacing = 3.sp)
             }
         }
+        if (isPinned) {
+            CoverBadge(
+                symbol = ToreadSymbols.Keep,
+                contentDescription = ToreadStrings.PinnedBadgeDescription,
+                modifier = Modifier.align(Alignment.TopStart),
+            )
+        }
         if (showSyncBadge) {
             SyncStatusBadge(
                 status = book.syncStatus,
@@ -1081,6 +1139,20 @@ private fun BookCover(
 
 @Composable
 private fun SyncStatusBadge(status: String, modifier: Modifier = Modifier) {
+    CoverBadge(
+        symbol = status.syncStatusIcon(),
+        contentDescription = status.displaySyncStatus(),
+        modifier = modifier,
+    )
+}
+
+/** Semi-transparent corner marker shared by the sync state and the pin, so they read as one family. */
+@Composable
+private fun CoverBadge(
+    symbol: DrawableResource,
+    contentDescription: String,
+    modifier: Modifier = Modifier,
+) {
     Box(
         modifier = modifier
             .size(25.dp)
@@ -1089,10 +1161,67 @@ private fun SyncStatusBadge(status: String, modifier: Modifier = Modifier) {
         contentAlignment = Alignment.Center,
     ) {
         ToreadSymbolIcon(
-            symbol = status.syncStatusIcon(),
-            contentDescription = status.displaySyncStatus(),
+            symbol = symbol,
+            contentDescription = contentDescription,
             tint = Color.White.copy(alpha = 0.74f),
             modifier = Modifier.size(16.dp),
+        )
+    }
+}
+
+/** What a book's context menu can do; grouped so the cards keep a readable signature. */
+private data class BookshelfBookMenuActions(
+    val onTogglePin: () -> Unit,
+    val onEditInfo: () -> Unit,
+    val onDelete: () -> Unit,
+)
+
+@Composable
+private fun BookContextMenu(
+    expanded: Boolean,
+    isPinned: Boolean,
+    actions: BookshelfBookMenuActions,
+    onDismiss: () -> Unit,
+) {
+    DropdownMenu(expanded = expanded, onDismissRequest = onDismiss) {
+        DropdownMenuItem(
+            text = { Text(if (isPinned) ToreadStrings.UnpinBook else ToreadStrings.PinBook) },
+            leadingIcon = {
+                ToreadSymbolIcon(symbol = ToreadSymbols.Keep, contentDescription = null)
+            },
+            onClick = {
+                onDismiss()
+                actions.onTogglePin()
+            },
+        )
+        DropdownMenuItem(
+            text = { Text(ToreadStrings.EditBookInfo) },
+            leadingIcon = {
+                ToreadSymbolIcon(symbol = ToreadSymbols.Article, contentDescription = null)
+            },
+            onClick = {
+                onDismiss()
+                actions.onEditInfo()
+            },
+        )
+        DropdownMenuItem(
+            text = {
+                Text(
+                    text = ToreadStrings.DeleteBook,
+                    color = MaterialTheme.colorScheme.error,
+                )
+            },
+            leadingIcon = {
+                ToreadSymbolIcon(
+                    symbol = ToreadSymbols.DeleteSweep,
+                    contentDescription = ToreadStrings.DeleteBookMenuDescription,
+                    tint = MaterialTheme.colorScheme.error,
+                )
+            },
+            onClick = {
+                onDismiss()
+                actions.onDelete()
+            },
         )
     }
 }

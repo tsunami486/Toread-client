@@ -33,6 +33,16 @@ expect class BookFileStorage() {
         bookHash: String,
         extension: String,
     ): StoredBookFile
+
+    /** Copies a user-picked image into the book's own directory and returns its stored path. */
+    suspend fun copyCoverToBookDirectory(
+        file: PlatformFile,
+        bookHash: String,
+        extension: String,
+    ): String?
+
+    /** Removes the book's private directory after the book is deleted from the shelf. */
+    suspend fun deleteBookDirectory(bookHash: String, bookFilePath: String)
 }
 
 expect class CoverImageBytesLoader() {

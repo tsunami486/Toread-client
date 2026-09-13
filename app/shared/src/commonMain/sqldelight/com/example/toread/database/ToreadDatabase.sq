@@ -153,6 +153,26 @@ SET title = ?,
     updated_at = ?
 WHERE book_hash = ?;
 
+deleteBookByHash:
+DELETE FROM local_books
+WHERE book_hash = ?;
+
+deleteProgressByBookHash:
+DELETE FROM local_progress
+WHERE book_hash = ?;
+
+deleteBookmarksByBookHash:
+DELETE FROM local_bookmarks
+WHERE book_hash = ?;
+
+deleteNotesByBookHash:
+DELETE FROM local_notes
+WHERE book_hash = ?;
+
+deleteSyncQueueItemsByEntity:
+DELETE FROM sync_queue
+WHERE entity_id = ?;
+
 updateBookLastReadAt:
 UPDATE local_books
 SET last_read_at = ?,
