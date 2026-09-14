@@ -3,6 +3,7 @@ package com.example.toread.ui.screens
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.hoverable
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.collectIsHoveredAsState
@@ -10,6 +11,8 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.aspectRatio
@@ -27,14 +30,18 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.BottomSheetDefaults
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.ListItem
+import androidx.compose.material3.ListItemDefaults
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -46,6 +53,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.geometry.CornerRadius
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.PathEffect
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.drawscope.Stroke
@@ -59,18 +67,30 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import com.example.toread.library.BookLocalAnnotations
+import com.example.toread.categories.BookCategoryInput
+import com.example.toread.categories.BookCategorySuggestion
+import com.example.toread.categories.MaximumCategoryLength
+import com.example.toread.categories.appendTag
+import com.example.toread.categories.builtInCategoryKeywords
+import com.example.toread.categories.parseTagList
+import com.example.toread.categories.recordCategoryMemory
+import com.example.toread.categories.suggestBookCategories
+import com.example.toread.categories.toggleTag
 import com.example.toread.library.BookshelfBook
 import com.example.toread.library.BookshelfRepository
+import com.example.toread.metadata.BookLocalAnnotations
 import com.example.toread.platform.BookFileStorage
 import com.example.toread.platform.ImagePickResult
 import com.example.toread.platform.PlatformBackHandler
 import com.example.toread.platform.PlatformFile
 import com.example.toread.platform.PlatformImagePicker
+import com.example.toread.settings.LocalSettingsRepository
 import com.example.toread.ui.icons.ToreadSymbolIcon
 import com.example.toread.ui.icons.ToreadSymbols
+import com.example.toread.ui.reader.ReaderSheetCornerRadius
 import com.example.toread.ui.text.ToreadStrings
 import kotlinx.coroutines.launch
+import org.jetbrains.compose.resources.DrawableResource
 
 /**
  * Book information editing, following the two design sheets: a stacked layout on phones and a
@@ -81,14 +101,17 @@ private val BookInfoContentMaxWidth = 840.dp
 private val BookInfoWideBreakpoint = 768.dp
 private val BookInfoCoverCardWidth = 240.dp
 private val BookInfoFieldHeight = 42.dp
-private val BookInfoNoteHeight = 96.dp
-private val BookInfoCompactNoteHeight = 74.dp
+// 简介 grows with its text (`heightIn(min = …)`), so these are only the empty-state heights: a
+// description-filled field must not show a big blank box, and a long 简介 must not be cut off.
+private val BookInfoNoteMinHeight = 72.dp
+private val BookInfoCompactNoteMinHeight = 64.dp
 private val CoverImageExtensions = listOf("jpg", "jpeg", "png", "webp")
 
 @Composable
 internal fun BookInfoPage(
     book: BookshelfBook?,
     bookshelfRepository: BookshelfRepository?,
+    settingsRepository: LocalSettingsRepository? = null,
     onBack: () -> Unit,
     onSaved: () -> Unit,
     onDelete: (BookshelfBook) -> Unit = {},
@@ -101,6 +124,27 @@ internal fun BookInfoPage(
     var author by remember(book?.bookHash) { mutableStateOf(book?.author.orEmpty()) }
     var tags by remember(book?.bookHash) { mutableStateOf(book?.localTags.orEmpty()) }
     var notes by remember(book?.bookHash) { mutableStateOf(book?.localNotes.orEmpty()) }
+    // What is already persisted, so an automatically filled 简介 does not read as an unsaved edit.
+    var savedNotes by remember(book?.bookHash) { mutableStateOf(book?.localNotes.orEmpty()) }
+    var savedTags by remember(book?.bookHash) { mutableStateOf(book?.localTags.orEmpty()) }
+    // Whether the automatic extraction pass has already visited this book.
+    var insightChecked by remember(book?.bookHash) {
+        mutableStateOf(book?.importedInsight?.checked == true)
+    }
+    // The categories the book itself declares, used as a chip source until the pass refreshes them.
+    var importedTags by remember(book?.bookHash) {
+        mutableStateOf(book?.importedInsight?.subjects.orEmpty())
+    }
+    var categoryDictionary by remember(book?.bookHash) {
+        mutableStateOf(settingsRepository?.categoryDictionary().orEmpty())
+    }
+    var categoryMemory by remember(book?.bookHash) {
+        mutableStateOf(settingsRepository?.categoryMemory().orEmpty())
+    }
+    var tagsExpanded by remember(book?.bookHash) { mutableStateOf(false) }
+    var customTagDialogVisible by remember(book?.bookHash) { mutableStateOf(false) }
+    var customTagInput by remember(book?.bookHash) { mutableStateOf("") }
+    var customTagError by remember(book?.bookHash) { mutableStateOf<String?>(null) }
     // The cover to save: the book's own file path, a freshly copied image, or null for the generated one.
     var coverPath by remember(book?.bookHash) { mutableStateOf(book?.coverPath) }
     var saving by remember(book?.bookHash) { mutableStateOf(false) }
@@ -119,10 +163,60 @@ internal fun BookInfoPage(
     val hasUnsavedChanges = book != null && (
         title != book.title ||
             author != book.author.orEmpty() ||
-            tags != book.localTags ||
-            notes != book.localNotes ||
+            tags != savedTags ||
+            notes != savedNotes ||
             coverPath != book.coverPath
         )
+    val selectedTags = remember(tags) { parseTagList(tags) }
+    val categorySuggestions = remember(title, author, tags, notes, importedTags, categoryDictionary, categoryMemory) {
+        suggestBookCategories(
+            input = BookCategoryInput(
+                title = title,
+                author = author,
+                tags = tags,
+                description = notes,
+            ),
+            userEntries = categoryDictionary,
+            memoryEntries = categoryMemory,
+        )
+    }
+    // Everything the reader may pick from: their own choice first, then what the book declares, then
+    // the rules' suggestions, then the reader's own rules and the shipped dictionary.
+    val categoryCatalog = remember(selectedTags, importedTags, categorySuggestions, categoryDictionary) {
+        buildList {
+            addAll(selectedTags)
+            addAll(importedTags)
+            addAll(categorySuggestions.map { it.category })
+            addAll(categoryDictionary.map { it.category })
+            addAll(builtInCategoryKeywords.map { (category, _) -> category })
+        }
+            .map(String::trim)
+            .filter { it.isNotBlank() }
+            .distinct()
+    }
+
+    /**
+     * Reading the description out of the book is silent and automatic: this page only notices that the
+     * book has not been visited yet and runs the pass once. The repository persists what it finds —
+     * 简介 gets the description when the reader has not written one, 分类/标签 never — so the fields
+     * below simply pick up the new value and no extraction UI exists.
+     */
+    LaunchedEffect(book?.bookHash, insightChecked) {
+        val target = book ?: return@LaunchedEffect
+        val repository = bookshelfRepository ?: return@LaunchedEffect
+        if (insightChecked) return@LaunchedEffect
+        val refreshed = repository.extractBookInsight(target.bookHash) ?: return@LaunchedEffect
+        insightChecked = refreshed.insight.checked
+        importedTags = refreshed.insight.subjects
+        if (notes.isBlank() && refreshed.notes.isNotBlank()) {
+            notes = refreshed.notes
+            savedNotes = refreshed.notes
+        }
+        if (tags.isBlank() && refreshed.tags.isNotBlank()) {
+            tags = refreshed.tags
+            savedTags = refreshed.tags
+        }
+    }
 
     /** Leaving the page asks about unsaved edits instead of dropping them silently. */
     fun requestBack() {
@@ -163,6 +257,39 @@ internal fun BookInfoPage(
         }
     }
 
+    /**
+     * Remembers the categories the reader just saved, so a later suggestion for the same author or
+     * series already knows the answer. Device-level and local: nothing here is synced.
+     */
+    fun rememberSavedCategories() {
+        val store = settingsRepository ?: return
+        val updated = recordCategoryMemory(
+            existing = store.categoryMemory(),
+            input = BookCategoryInput(
+                title = title,
+                author = author,
+                tags = tags,
+                description = notes,
+            ),
+            savedTags = tags,
+        )
+        if (updated == categoryMemory) return
+        store.setCategoryMemory(updated)
+        categoryMemory = updated
+    }
+
+    /**
+     * The reader's own label (借来的、在读…) is in no catalog, so the custom chip opens a one-field
+     * dialog instead of leaving them without a way in.
+     */
+    fun openCustomTagDialog() {
+        keyboardController?.hide()
+        focusManager.clearFocus()
+        customTagInput = ""
+        customTagError = null
+        customTagDialogVisible = true
+    }
+
     fun save() {
         val target = book ?: return
         val repository = bookshelfRepository ?: return
@@ -185,6 +312,9 @@ internal fun BookInfoPage(
                 return@launch
             }
             repository.updateBookCoverPath(target.bookHash, coverPath)
+            rememberSavedCategories()
+            savedNotes = notes
+            savedTags = tags
             saving = false
             onSaved()
         }
@@ -240,11 +370,16 @@ internal fun BookInfoPage(
                                 book = previewBook,
                                 title = title,
                                 author = author,
-                                tags = tags,
+                                selectedTags = selectedTags,
+                                suggestions = categorySuggestions,
+                                catalog = categoryCatalog,
+                                tagsExpanded = tagsExpanded,
                                 notes = notes,
                                 onTitleChange = { title = it },
                                 onAuthorChange = { author = it },
-                                onTagsChange = { tags = it },
+                                onToggleTagsExpanded = { tagsExpanded = !tagsExpanded },
+                                onToggleTag = { toggled -> tags = toggleTag(tags, toggled) },
+                                onAddCustomTag = { openCustomTagDialog() },
                                 onNotesChange = { notes = it },
                                 onPickCover = ::pickCover,
                                 onUseGeneratedCover = {
@@ -260,12 +395,17 @@ internal fun BookInfoPage(
                             BookInfoFields(
                                 title = title,
                                 author = author,
-                                tags = tags,
+                                selectedTags = selectedTags,
+                                suggestions = categorySuggestions,
+                                catalog = categoryCatalog,
+                                tagsExpanded = tagsExpanded,
                                 notes = notes,
-                                noteHeight = BookInfoCompactNoteHeight,
+                                noteHeight = BookInfoCompactNoteMinHeight,
                                 onTitleChange = { title = it },
                                 onAuthorChange = { author = it },
-                                onTagsChange = { tags = it },
+                                onToggleTagsExpanded = { tagsExpanded = !tagsExpanded },
+                                onToggleTag = { toggled -> tags = toggleTag(tags, toggled) },
+                                onAddCustomTag = { openCustomTagDialog() },
                                 onNotesChange = { notes = it },
                             )
                         }
@@ -379,6 +519,57 @@ internal fun BookInfoPage(
                 },
             )
         }
+
+        if (customTagDialogVisible) {
+            AlertDialog(
+                onDismissRequest = { customTagDialogVisible = false },
+                title = { Text(ToreadStrings.BookInfoTagsCustomTitle) },
+                text = {
+                    Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                        OutlinedTextField(
+                            value = customTagInput,
+                            onValueChange = { customTagInput = it },
+                            singleLine = true,
+                            label = { Text(ToreadStrings.BookInfoTagsCustomLabel) },
+                            placeholder = { Text(ToreadStrings.BookInfoTagsCustomPlaceholder) },
+                        )
+                        customTagError?.let { error ->
+                            Text(
+                                text = error,
+                                color = MaterialTheme.colorScheme.error,
+                                fontSize = 12.sp,
+                            )
+                        }
+                    }
+                },
+                confirmButton = {
+                    TextButton(
+                        onClick = {
+                            val clean = customTagInput.trim()
+                            when {
+                                clean.isEmpty() -> customTagError = ToreadStrings.BookInfoTagsCustomEmpty
+                                clean.length > MaximumCategoryLength -> {
+                                    customTagError = ToreadStrings.bookInfoTagsCustomTooLong(
+                                        MaximumCategoryLength,
+                                    )
+                                }
+                                else -> {
+                                    tags = appendTag(tags, clean)
+                                    customTagDialogVisible = false
+                                }
+                            }
+                        },
+                    ) {
+                        Text(ToreadStrings.DialogConfirm)
+                    }
+                },
+                dismissButton = {
+                    TextButton(onClick = { customTagDialogVisible = false }) {
+                        Text(ToreadStrings.DialogCancel)
+                    }
+                },
+            )
+        }
     }
 }
 
@@ -390,36 +581,66 @@ private fun CoverActionSheet(
     onPickFromGallery: () -> Unit,
     onUseGeneratedCover: () -> Unit,
 ) {
-    ModalBottomSheet(onDismissRequest = onDismiss) {
+    ModalBottomSheet(
+        onDismissRequest = onDismiss,
+        // The app's own sheet surface: the reader's chapter drawer paints `surface` with rounded top
+        // corners and this handle, while Material's default sheet would come up on the lighter
+        // `surfaceContainerLow` and read as a different panel.
+        containerColor = MaterialTheme.colorScheme.surface,
+        shape = RoundedCornerShape(
+            topStart = ReaderSheetCornerRadius,
+            topEnd = ReaderSheetCornerRadius,
+        ),
+        dragHandle = {
+            BottomSheetDefaults.DragHandle(color = MaterialTheme.colorScheme.outlineVariant)
+        },
+    ) {
         Column(
             modifier = Modifier
                 .fillMaxWidth()
                 .padding(bottom = 24.dp),
         ) {
-            ListItem(
-                headlineContent = { Text(ToreadStrings.BookInfoCoverPick) },
-                supportingContent = { Text(ToreadStrings.BookInfoCoverPickHint) },
-                leadingContent = {
-                    ToreadSymbolIcon(
-                        symbol = ToreadSymbols.PhotoCamera,
-                        contentDescription = null,
-                    )
-                },
-                modifier = Modifier.clickable(onClick = onPickFromGallery),
+            CoverActionRow(
+                symbol = ToreadSymbols.Photo,
+                title = ToreadStrings.BookInfoCoverPick,
+                description = ToreadStrings.BookInfoCoverPickHint,
+                onClick = onPickFromGallery,
             )
-            ListItem(
-                headlineContent = { Text(ToreadStrings.BookInfoCoverGenerated) },
-                supportingContent = { Text(ToreadStrings.BookInfoCoverGeneratedHint) },
-                leadingContent = {
-                    ToreadSymbolIcon(
-                        symbol = ToreadSymbols.PhotoCamera,
-                        contentDescription = null,
-                    )
-                },
-                modifier = Modifier.clickable(onClick = onUseGeneratedCover),
+            CoverActionRow(
+                symbol = ToreadSymbols.Article,
+                title = ToreadStrings.BookInfoCoverGenerated,
+                description = ToreadStrings.BookInfoCoverGeneratedHint,
+                onClick = onUseGeneratedCover,
             )
         }
     }
+}
+
+/** One row of [CoverActionSheet]; its container stays transparent so it sits on the sheet surface. */
+@Composable
+private fun CoverActionRow(
+    symbol: DrawableResource,
+    title: String,
+    description: String,
+    onClick: () -> Unit,
+) {
+    ListItem(
+        headlineContent = {
+            Text(title, color = MaterialTheme.colorScheme.onSurface)
+        },
+        supportingContent = {
+            Text(description, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        },
+        leadingContent = {
+            ToreadSymbolIcon(
+                symbol = symbol,
+                contentDescription = null,
+                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        },
+        colors = ListItemDefaults.colors(containerColor = Color.Transparent),
+        modifier = Modifier.clickable(onClick = onClick),
+    )
 }
 
 @Composable
@@ -657,11 +878,16 @@ private fun WideEditorRow(
     book: BookshelfBook?,
     title: String,
     author: String,
-    tags: String,
+    selectedTags: List<String>,
+    suggestions: List<BookCategorySuggestion>,
+    catalog: List<String>,
+    tagsExpanded: Boolean,
     notes: String,
     onTitleChange: (String) -> Unit,
     onAuthorChange: (String) -> Unit,
-    onTagsChange: (String) -> Unit,
+    onToggleTagsExpanded: () -> Unit,
+    onToggleTag: (String) -> Unit,
+    onAddCustomTag: () -> Unit,
     onNotesChange: (String) -> Unit,
     onPickCover: () -> Unit,
     onUseGeneratedCover: () -> Unit,
@@ -716,12 +942,17 @@ private fun WideEditorRow(
                 BookInfoFields(
                     title = title,
                     author = author,
-                    tags = tags,
+                    selectedTags = selectedTags,
+                    suggestions = suggestions,
+                    catalog = catalog,
+                    tagsExpanded = tagsExpanded,
                     notes = notes,
-                    noteHeight = BookInfoNoteHeight,
+                    noteHeight = BookInfoNoteMinHeight,
                     onTitleChange = onTitleChange,
                     onAuthorChange = onAuthorChange,
-                    onTagsChange = onTagsChange,
+                    onToggleTagsExpanded = onToggleTagsExpanded,
+                    onToggleTag = onToggleTag,
+                    onAddCustomTag = onAddCustomTag,
                     onNotesChange = onNotesChange,
                 )
             }
@@ -757,12 +988,17 @@ private fun SecondaryActionButton(label: String, onClick: () -> Unit) {
 private fun BookInfoFields(
     title: String,
     author: String,
-    tags: String,
+    selectedTags: List<String>,
+    suggestions: List<BookCategorySuggestion>,
+    catalog: List<String>,
+    tagsExpanded: Boolean,
     notes: String,
     noteHeight: Dp,
     onTitleChange: (String) -> Unit,
     onAuthorChange: (String) -> Unit,
-    onTagsChange: (String) -> Unit,
+    onToggleTagsExpanded: () -> Unit,
+    onToggleTag: (String) -> Unit,
+    onAddCustomTag: () -> Unit,
     onNotesChange: (String) -> Unit,
 ) {
     Column(verticalArrangement = Arrangement.spacedBy(18.dp)) {
@@ -780,12 +1016,16 @@ private fun BookInfoFields(
             onValueChange = onAuthorChange,
             height = BookInfoFieldHeight,
         )
-        BookInfoField(
-            label = ToreadStrings.BookInfoTagsLabel,
-            value = tags,
-            placeholder = ToreadStrings.BookInfoTagsPlaceholder,
-            onValueChange = onTagsChange,
-            height = BookInfoFieldHeight,
+        // 分类/标签 is a chip picker, not a text box: the first row shows what this book is already
+        // filed under (or the top suggestions while it has none) and the arrow opens the full catalog.
+        TagChipsField(
+            selectedTags = selectedTags,
+            suggestions = suggestions,
+            catalog = catalog,
+            expanded = tagsExpanded,
+            onToggleExpanded = onToggleTagsExpanded,
+            onToggleTag = onToggleTag,
+            onAddCustomTag = onAddCustomTag,
         )
         BookInfoField(
             label = ToreadStrings.BookInfoNotesLabel,
@@ -797,6 +1037,147 @@ private fun BookInfoFields(
         )
     }
 }
+
+/** The 分类/标签 chips: one row by default, the whole catalog once the arrow is tapped. */
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
+private fun TagChipsField(
+    selectedTags: List<String>,
+    suggestions: List<BookCategorySuggestion>,
+    catalog: List<String>,
+    expanded: Boolean,
+    onToggleExpanded: () -> Unit,
+    onToggleTag: (String) -> Unit,
+    onAddCustomTag: () -> Unit,
+) {
+    val selectedKeys = selectedTags.map { it.lowercase() }.toSet()
+    val isSelected: (String) -> Boolean = { tag -> tag.lowercase() in selectedKeys }
+    // The collapsed row is the book's own categories; a book that has none yet shows the top
+    // suggestions instead, so the row is never an empty strip.
+    val firstRowTags = selectedTags.ifEmpty { suggestions.map { it.category }.take(FirstRowSuggestionCount) }
+
+    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        Text(
+            text = ToreadStrings.BookInfoTagsLabel,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            fontSize = 12.sp,
+            fontWeight = FontWeight.Medium,
+        )
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(4.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            if (firstRowTags.isEmpty()) {
+                Text(
+                    text = ToreadStrings.BookInfoTagsEmptyHint,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    fontSize = 12.sp,
+                    modifier = Modifier.weight(1f),
+                )
+            } else {
+                Row(
+                    modifier = Modifier
+                        .weight(1f)
+                        .horizontalScroll(rememberScrollState()),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    firstRowTags.forEach { tag ->
+                        TagChip(
+                            label = tag,
+                            selected = isSelected(tag),
+                            onClick = { onToggleTag(tag) },
+                        )
+                    }
+                }
+            }
+            IconButton(onClick = onToggleExpanded, modifier = Modifier.size(32.dp)) {
+                ToreadSymbolIcon(
+                    symbol = if (expanded) {
+                        ToreadSymbols.KeyboardArrowUp
+                    } else {
+                        ToreadSymbols.KeyboardArrowDown
+                    },
+                    contentDescription = if (expanded) {
+                        ToreadStrings.BookInfoTagsCollapseHint
+                    } else {
+                        ToreadStrings.BookInfoTagsExpandHint
+                    },
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.size(22.dp),
+                )
+            }
+        }
+        if (expanded) {
+            FlowRow(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                catalog.forEach { tag ->
+                    TagChip(
+                        label = tag,
+                        selected = isSelected(tag),
+                        onClick = { onToggleTag(tag) },
+                    )
+                }
+                // The catalog cannot cover a reader's own labels (借来的、在读…), so the last chip
+                // opens a one-field dialog instead of leaving them without a way in.
+                TagChip(
+                    label = ToreadStrings.BookInfoTagsCustomChip,
+                    selected = false,
+                    onClick = onAddCustomTag,
+                )
+            }
+        }
+    }
+}
+
+/** One selectable category; the selected ones carry the accent colour. */
+@Composable
+private fun TagChip(
+    label: String,
+    selected: Boolean,
+    onClick: () -> Unit,
+) {
+    Box(
+        modifier = Modifier
+            .clip(CircleShape)
+            .background(
+                if (selected) {
+                    MaterialTheme.colorScheme.primary
+                } else {
+                    MaterialTheme.colorScheme.surfaceContainerHigh
+                },
+            )
+            .border(
+                width = 1.dp,
+                color = if (selected) {
+                    MaterialTheme.colorScheme.primary
+                } else {
+                    MaterialTheme.colorScheme.outlineVariant
+                },
+                shape = CircleShape,
+            )
+            .clickable(onClick = onClick)
+            .padding(horizontal = 12.dp, vertical = 6.dp),
+        contentAlignment = Alignment.Center,
+    ) {
+        Text(
+            text = label,
+            color = if (selected) {
+                MaterialTheme.colorScheme.onPrimary
+            } else {
+                MaterialTheme.colorScheme.onSurface
+            },
+            fontSize = 12.sp,
+        )
+    }
+}
+
+/** How many suggestions the collapsed row falls back to while the book has no category yet. */
+private const val FirstRowSuggestionCount = 3
 
 @Composable
 private fun BookInfoField(
@@ -818,7 +1199,16 @@ private fun BookInfoField(
         Box(
             modifier = Modifier
                 .fillMaxWidth()
-                .height(height)
+                // 简介 is a description, not a caption: the field starts tall and keeps growing with
+                // its content instead of hiding the text behind an inner scroll, so a whole blurb is
+                // readable at once. Single-line fields keep their fixed height.
+                .then(
+                    if (singleLine) {
+                        Modifier.height(height)
+                    } else {
+                        Modifier.heightIn(min = height)
+                    },
+                )
                 .clip(RoundedCornerShape(8.dp))
                 .background(MaterialTheme.colorScheme.background)
                 .border(

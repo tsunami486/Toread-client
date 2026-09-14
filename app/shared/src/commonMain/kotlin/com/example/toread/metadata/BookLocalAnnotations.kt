@@ -1,4 +1,4 @@
-package com.example.toread.library
+package com.example.toread.metadata
 
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject

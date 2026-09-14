@@ -2,8 +2,18 @@ package com.example.toread.library
 
 import com.example.toread.database.ToreadDatabase
 import com.example.toread.importing.BookCoverExtractor
+import com.example.toread.importing.BookInsightExtractor
 import com.example.toread.importing.EpubMetadataExtractor
 import com.example.toread.importing.buildLocalImportMetadataJson
+import com.example.toread.logging.ToreadClientLog
+import com.example.toread.metadata.BookInsight
+import com.example.toread.metadata.BookLocalAnnotations
+import com.example.toread.metadata.StoredBookInsight
+import com.example.toread.metadata.encodeBookLocalAnnotations
+import com.example.toread.metadata.encodeStoredBookInsight
+import com.example.toread.metadata.hasCurrentBookInsight
+import com.example.toread.metadata.parseBookLocalAnnotations
+import com.example.toread.metadata.parseStoredBookInsight
 import com.example.toread.platform.BookFileStorage
 import com.example.toread.progress.PlatformProgressClock
 import com.example.toread.progress.ProgressClock
@@ -17,6 +27,7 @@ class BookshelfRepository(
     private val coverExtractor: BookCoverExtractor = BookCoverExtractor(),
     private val epubMetadataExtractor: EpubMetadataExtractor = EpubMetadataExtractor(),
     private val bookFileStorage: BookFileStorage = BookFileStorage(),
+    private val bookInsightExtractor: BookInsightExtractor = BookInsightExtractor(),
     private val clock: ProgressClock = PlatformProgressClock(),
 ) {
     fun listBooks(): List<BookshelfBook> =
@@ -42,6 +53,7 @@ class BookshelfRepository(
                 progressSyncStatus = progress?.sync_status,
                 localTags = annotations.tags,
                 localNotes = annotations.notes,
+                importedInsight = parseStoredBookInsight(row.metadata_json),
             )
         }
 
@@ -93,6 +105,161 @@ class BookshelfRepository(
                 updated++
             }
         return updated
+    }
+
+    /**
+     * Runs one insight extraction pass for [bookHash] — the automatic path the book info page uses
+     * when it opens a book that has not been visited yet.
+     *
+     * Besides the `imported_*` keys it fills 简介 with the description it found, and only when the
+     * reader has not written anything there; 分类/标签 is never filled automatically, because
+     * categories are offered as suggestions instead.
+     */
+    suspend fun extractBookInsight(bookHash: String): BookInsightRefresh? {
+        val book = database.toreadDatabaseQueries
+            .selectBookByHash(bookHash)
+            .executeAsOneOrNull()
+            ?: return null
+        // The stored copy is named after the book hash, so only the file itself can be consulted.
+        val insight = bookInsightExtractor.extract(
+            bookFilePath = book.file_path,
+            format = book.format,
+            fileName = null,
+        )
+        val metadataJson = storeBookInsight(
+            bookHash = book.book_hash,
+            title = book.title,
+            author = book.author,
+            format = book.format,
+            metadataJson = book.metadata_json,
+            insight = insight,
+        )
+        ToreadClientLog.info(
+            "import",
+            "import.insight_extracted",
+            "format" to book.format,
+            "source" to insight?.descriptionSource?.storedValue,
+            "description_chars" to insight?.description?.length,
+            "tags" to insight?.subjects?.size,
+            "bookHashPrefix" to book.book_hash.take(8),
+        )
+        return BookInsightRefresh(
+            insight = parseStoredBookInsight(metadataJson),
+            notes = parseBookLocalAnnotations(metadataJson).notes,
+            tags = parseBookLocalAnnotations(metadataJson).tags,
+        )
+    }
+
+    /**
+     * Visits books imported before the extraction existed — or before it learned a new source — and
+     * stores what their own files say. Bounded per call so a manual refresh over a large shelf stays
+     * quick; a book is only ever visited once per extractor version.
+     */
+    suspend fun backfillMissingBookInsights(limit: Int = DefaultInsightBackfillLimit): Int {
+        if (limit <= 0) return 0
+        val books = database.toreadDatabaseQueries.selectAllBooks().executeAsList()
+        var updated = 0
+        for (book in books) {
+            if (updated >= limit) break
+            if (hasCurrentBookInsight(book.metadata_json)) continue
+            val insight = bookInsightExtractor.extract(
+                bookFilePath = book.file_path,
+                format = book.format,
+                fileName = null,
+            )
+            storeBookInsight(
+                bookHash = book.book_hash,
+                title = book.title,
+                author = book.author,
+                format = book.format,
+                metadataJson = book.metadata_json,
+                insight = insight,
+            )
+            updated++
+            ToreadClientLog.info(
+                "import",
+                "import.insight_backfilled",
+                "format" to book.format,
+                "source" to insight?.descriptionSource?.storedValue,
+                "description_chars" to insight?.description?.length,
+                "tags" to insight?.subjects?.size,
+                "bookHashPrefix" to book.book_hash.take(8),
+            )
+        }
+        return updated
+    }
+
+    /**
+     * Writes [insight] into the book's metadata JSON and queues the metadata upsert, exactly like an
+     * edit does, so the extracted description reaches the other devices through the normal sync path.
+     *
+     * The description is also filled into 简介, but only while that field still belongs to the
+     * extractor: it is written when it is empty, and refreshed when it still holds exactly the
+     * description a previous pass wrote — so a better extractor can correct its own text — while a
+     * note the reader typed is never touched. 分类/标签 is never written: categories stay suggestions,
+     * because a wrong automatic category is worse than an empty one.
+     */
+    private fun storeBookInsight(
+        bookHash: String,
+        title: String,
+        author: String?,
+        format: String,
+        metadataJson: String,
+        insight: BookInsight?,
+    ): String {
+        val previousDescription = parseStoredBookInsight(metadataJson).description
+        val withInsight = encodeStoredBookInsight(metadataJson = metadataJson, insight = insight)
+        val description = insight?.description?.trim().orEmpty()
+        val annotations = parseBookLocalAnnotations(withInsight)
+        val notesAreOurs = annotations.notes.isBlank() ||
+            (previousDescription != null && annotations.notes == previousDescription)
+        val updatedMetadataJson = if (description.isNotEmpty() && notesAreOurs) {
+            encodeBookLocalAnnotations(
+                metadataJson = withInsight,
+                annotations = annotations.copy(notes = description),
+            )
+        } else {
+            withInsight
+        }
+        val now = clock.nowIsoString()
+        database.toreadDatabaseQueries.transaction {
+            database.toreadDatabaseQueries.updateBookMetadata(
+                title = title,
+                author = author,
+                metadata_json = updatedMetadataJson,
+                sync_status = "pending",
+                updated_at = now,
+                book_hash = bookHash,
+            )
+            database.toreadDatabaseQueries.markSyncQueueItemsSupersededForEntity(
+                updated_at = now,
+                entity_type = BookMetadataEntityType,
+                entity_id = bookHash,
+            )
+            database.toreadDatabaseQueries.insertSyncQueueItem(
+                id = "book_${bookHash}_${now}_insight",
+                entity_type = BookMetadataEntityType,
+                entity_id = bookHash,
+                action = "upsert",
+                payload_json = BookMetadataJson.encode(
+                    BookMetadataSyncPayload(
+                        bookHash = bookHash,
+                        title = title,
+                        author = author,
+                        format = format,
+                        metadataJson = BookMetadataJson.parseMetadataJson(updatedMetadataJson),
+                        updatedAt = now,
+                    ),
+                ),
+                sync_status = "pending",
+                retry_count = 0,
+                last_error = null,
+                created_at = now,
+                updated_at = now,
+                next_retry_at = null,
+            )
+        }
+        return updatedMetadataJson
     }
 
     fun ensurePendingBookMetadataQueued(): Int {
@@ -259,8 +426,21 @@ class BookshelfRepository(
 
     private companion object {
         const val BookMetadataEntityType = "book_metadata"
+
+        /** How many books one manual refresh may open for the insight backfill. */
+        const val DefaultInsightBackfillLimit = 8
     }
 }
+
+/**
+ * What one automatic extraction pass left in the book's record: the stored candidate insight and the
+ * 简介/分类 values that are now persisted, so the book info page can show them without reloading.
+ */
+data class BookInsightRefresh(
+    val insight: StoredBookInsight,
+    val notes: String,
+    val tags: String,
+)
 
 data class BookshelfBook(
     val bookHash: String,
@@ -279,4 +459,6 @@ data class BookshelfBook(
     /** The user's own tags and note, edited on the book info page; kept in the local metadata JSON. */
     val localTags: String = "",
     val localNotes: String = "",
+    /** The candidate description/tags the importer read out of the book file itself. */
+    val importedInsight: StoredBookInsight = StoredBookInsight(),
 )

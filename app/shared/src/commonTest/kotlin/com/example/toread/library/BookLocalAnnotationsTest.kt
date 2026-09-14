@@ -1,5 +1,8 @@
 package com.example.toread.library
 
+import com.example.toread.metadata.BookLocalAnnotations
+import com.example.toread.metadata.encodeBookLocalAnnotations
+import com.example.toread.metadata.parseBookLocalAnnotations
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse

@@ -26,6 +26,7 @@ import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.RadioButton
 import androidx.compose.material3.RadioButtonDefaults
 import androidx.compose.material3.Switch
@@ -48,6 +49,9 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.example.toread.categories.BookCategoryEntry
+import com.example.toread.categories.builtInCategoryKeywords
+import com.example.toread.categories.removeCategoryMemory
 import com.example.toread.platform.PlatformBackHandler
 import com.example.toread.settings.AuthMode
 import com.example.toread.settings.LocalSettingsRepository
@@ -69,6 +73,7 @@ import org.jetbrains.compose.resources.DrawableResource
 private enum class SettingsSubPage {
     Interface,
     Appearance,
+    CategoryLexicon,
 }
 
 private val SettingsContentMaxWidth = 720.dp
@@ -125,6 +130,7 @@ internal fun SettingsPage(
                 title = when (subPage) {
                     SettingsSubPage.Interface -> ToreadStrings.SettingsInterface
                     SettingsSubPage.Appearance -> ToreadStrings.SettingsAppearance
+                    SettingsSubPage.CategoryLexicon -> ToreadStrings.SettingsCategoryLexicon
                     null -> ToreadStrings.Settings
                 },
                 onBack = { if (subPage != null) subPage = null else onBack() },
@@ -141,6 +147,9 @@ internal fun SettingsPage(
                     settingsEnabled = settingsRepository != null,
                     onAppearanceChange = onAppearanceChange,
                 )
+                SettingsSubPage.CategoryLexicon -> CategoryLexiconSettingsContent(
+                    settingsRepository = settingsRepository,
+                )
                 null -> SettingsOverviewContent(
                     accountTitle = accountTitle,
                     accountSubtitle = accountSubtitle,
@@ -150,6 +159,7 @@ internal fun SettingsPage(
                     onAutoSyncEnabledChange = onAutoSyncEnabledChange,
                     onOpenInterface = { subPage = SettingsSubPage.Interface },
                     onOpenAppearance = { subPage = SettingsSubPage.Appearance },
+                    onOpenCategoryLexicon = { subPage = SettingsSubPage.CategoryLexicon },
                     onClearCache = onClearCache,
                     onAbout = { showAboutDialog = true },
                     onLogout = onLogout,
@@ -187,6 +197,7 @@ private fun SettingsOverviewContent(
     onAutoSyncEnabledChange: (Boolean) -> Unit,
     onOpenInterface: () -> Unit,
     onOpenAppearance: () -> Unit,
+    onOpenCategoryLexicon: () -> Unit,
     onClearCache: () -> Unit,
     onAbout: () -> Unit,
     onLogout: () -> Unit,
@@ -204,6 +215,12 @@ private fun SettingsOverviewContent(
             title = ToreadStrings.SettingsAppearance,
             description = ToreadStrings.SettingsAppearanceDescription,
             onClick = onOpenAppearance,
+        )
+        SettingsNavigationRow(
+            symbol = ToreadSymbols.Tune,
+            title = ToreadStrings.SettingsCategoryLexicon,
+            description = ToreadStrings.SettingsCategoryLexiconDescription,
+            onClick = onOpenCategoryLexicon,
         )
     }
     SettingsGroup(title = ToreadStrings.SettingsGroupDataAndSync) {
@@ -238,9 +255,223 @@ private fun SettingsOverviewContent(
     }
 }
 
+/**
+ * The reader's own category rules and what the app has learned from them.
+ *
+ * Rules are plain `关键词 -> 分类` pairs applied to the title, series or description of a book; the
+ * memory records the categories the reader already chose for an author or series. Both are
+ * device-level, both stay local, and both only ever produce suggestions on the book info page.
+ */
 @Composable
-private fun InterfaceSettingsContent(
-    bookshelfLayoutMode: BookshelfLayoutMode,
+private fun CategoryLexiconSettingsContent(
+    settingsRepository: LocalSettingsRepository?,
+) {
+    val settingsEnabled = settingsRepository != null
+    var customEntries by remember(settingsRepository) {
+        mutableStateOf(settingsRepository?.categoryDictionary().orEmpty())
+    }
+    var memoryEntries by remember(settingsRepository) {
+        mutableStateOf(settingsRepository?.categoryMemory().orEmpty())
+    }
+    var addDialogVisible by remember { mutableStateOf(false) }
+    var keyword by remember { mutableStateOf("") }
+    var category by remember { mutableStateOf("") }
+    var error by remember { mutableStateOf<String?>(null) }
+
+    SettingsGroup(title = ToreadStrings.SettingsCategoryLexicon) {
+        Text(
+            text = ToreadStrings.CategoryLexiconIntro,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            fontSize = 13.sp,
+        )
+    }
+
+    // The shipped dictionary, one row per category, read-only: the reader can see exactly what the
+    // app already knows before adding a rule of their own.
+    SettingsGroup(title = ToreadStrings.CategoryLexiconBuiltInTitle) {
+        Text(
+            text = ToreadStrings.categoryLexiconBuiltInHint(
+                categoryCount = builtInCategoryKeywords.size,
+                keywordCount = builtInCategoryKeywords.sumOf { (_, keywords) -> keywords.size },
+            ),
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            fontSize = 12.sp,
+            modifier = Modifier.padding(bottom = 4.dp),
+        )
+        builtInCategoryKeywords.forEach { (category, keywords) ->
+            CategoryEntryRow(
+                symbol = ToreadSymbols.MenuBook,
+                title = category,
+                description = keywords.joinToString("、"),
+                enabled = true,
+            )
+        }
+    }
+
+    SettingsGroup(title = ToreadStrings.CategoryLexiconCustomTitle) {
+        if (customEntries.isEmpty()) {
+            Text(
+                text = ToreadStrings.CategoryLexiconCustomEmpty,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                fontSize = 13.sp,
+                modifier = Modifier.padding(vertical = 4.dp),
+            )
+        }
+        customEntries.forEach { entry ->
+            CategoryEntryRow(
+                symbol = ToreadSymbols.Tune,
+                title = entry.keyword,
+                description = entry.category,
+                enabled = settingsEnabled,
+                onRemove = {
+                    val updated = customEntries.filterNot { it == entry }
+                    settingsRepository?.setCategoryDictionary(updated)
+                    customEntries = updated
+                },
+            )
+        }
+        SettingsNavigationRow(
+            symbol = ToreadSymbols.Add,
+            title = ToreadStrings.CategoryLexiconAdd,
+            enabled = settingsEnabled,
+            onClick = {
+                keyword = ""
+                category = ""
+                error = null
+                addDialogVisible = true
+            },
+        )
+    }
+
+    SettingsGroup(title = ToreadStrings.CategoryLexiconMemoryTitle) {
+        if (memoryEntries.isEmpty()) {
+            Text(
+                text = ToreadStrings.CategoryLexiconMemoryEmpty,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                fontSize = 13.sp,
+                modifier = Modifier.padding(vertical = 4.dp),
+            )
+        } else {
+            memoryEntries.take(MaximumShownMemoryEntries).forEach { entry ->
+                CategoryEntryRow(
+                    symbol = ToreadSymbols.MenuBook,
+                    title = entry.keyword,
+                    description = entry.category,
+                    enabled = settingsEnabled,
+                    onRemove = {
+                        val updated = removeCategoryMemory(memoryEntries, entry)
+                        settingsRepository?.setCategoryMemory(updated)
+                        memoryEntries = updated
+                    },
+                )
+            }
+            SettingsNavigationRow(
+                symbol = ToreadSymbols.DeleteSweep,
+                title = ToreadStrings.CategoryLexiconMemoryClear,
+                enabled = settingsEnabled,
+                onClick = {
+                    settingsRepository?.setCategoryMemory(emptyList())
+                    memoryEntries = emptyList()
+                },
+            )
+        }
+    }
+
+    if (addDialogVisible) {
+        AlertDialog(
+            onDismissRequest = { addDialogVisible = false },
+            title = { Text(ToreadStrings.CategoryLexiconAddTitle) },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                    OutlinedTextField(
+                        value = keyword,
+                        onValueChange = { keyword = it },
+                        singleLine = true,
+                        label = { Text(ToreadStrings.CategoryLexiconKeywordLabel) },
+                        placeholder = { Text(ToreadStrings.CategoryLexiconKeywordPlaceholder) },
+                    )
+                    OutlinedTextField(
+                        value = category,
+                        onValueChange = { category = it },
+                        singleLine = true,
+                        label = { Text(ToreadStrings.CategoryLexiconCategoryLabel) },
+                        placeholder = { Text(ToreadStrings.CategoryLexiconCategoryPlaceholder) },
+                    )
+                    error?.let { text ->
+                        Text(
+                            text = text,
+                            color = MaterialTheme.colorScheme.error,
+                            fontSize = 12.sp,
+                        )
+                    }
+                }
+            },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        val entry = BookCategoryEntry(
+                            keyword = keyword.trim(),
+                            category = category.trim(),
+                        )
+                        if (entry.keyword.length < 2 || entry.category.isBlank()) {
+                            error = ToreadStrings.CategoryLexiconInvalid
+                            return@TextButton
+                        }
+                        val updated = (listOf(entry) + customEntries).distinct()
+                        settingsRepository?.setCategoryDictionary(updated)
+                        customEntries = updated
+                        addDialogVisible = false
+                    },
+                ) {
+                    Text(ToreadStrings.CategoryLexiconSave)
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { addDialogVisible = false }) {
+                    Text(ToreadStrings.DialogCancel)
+                }
+            },
+        )
+    }
+}
+
+/** One dictionary or memory rule: the keyword, the category it maps to, and a delete action. */
+@Composable
+private fun CategoryEntryRow(
+    symbol: DrawableResource,
+    title: String,
+    description: String,
+    enabled: Boolean,
+    onRemove: (() -> Unit)? = null,
+) {
+    SettingsRow(
+        symbol = symbol,
+        enabled = enabled,
+        modifier = Modifier,
+        trailing = {
+            // Built-in rules have no delete action: they are shown so the reader knows what already
+            // applies, and their own rules take precedence over them.
+            onRemove?.let { remove ->
+                IconButton(onClick = remove, enabled = enabled, modifier = Modifier.size(40.dp)) {
+                    ToreadSymbolIcon(
+                        symbol = ToreadSymbols.Remove,
+                        contentDescription = ToreadStrings.CategoryLexiconRemoveHint,
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.size(20.dp),
+                    )
+                }
+            }
+        },
+        title = title,
+        description = description,
+    )
+}
+
+/** The settings list never grows past this many memory rows; the rest stay stored. */
+private const val MaximumShownMemoryEntries = 20
+
+@Composable
+private fun InterfaceSettingsContent(    bookshelfLayoutMode: BookshelfLayoutMode,
     settingsEnabled: Boolean,
     onBookshelfLayoutModeChange: (BookshelfLayoutMode) -> Unit,
 ) {

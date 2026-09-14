@@ -2,6 +2,11 @@ package com.example.toread.importing
 
 import com.example.toread.database.DatabaseDriverFactory
 import com.example.toread.database.ToreadDatabase
+import com.example.toread.logging.ToreadClientLog
+import com.example.toread.metadata.BookInsight
+import com.example.toread.metadata.BookLocalAnnotations
+import com.example.toread.metadata.encodeBookLocalAnnotations
+import com.example.toread.metadata.encodeStoredBookInsight
 import com.example.toread.platform.BookFileStorage
 import com.example.toread.platform.FileHasher
 import com.example.toread.platform.PlatformFile
@@ -203,20 +208,39 @@ interface BookMetadataParser {
     suspend fun parse(file: PlatformFile, extension: String, storedFilePath: String): BookMetadata
 }
 
-class BasicBookMetadataParser : BookMetadataParser {
-    private val epubMetadataExtractor = EpubMetadataExtractor()
-
+class BasicBookMetadataParser(
+    private val epubMetadataExtractor: EpubMetadataExtractor = EpubMetadataExtractor(),
+    private val bookInsightExtractor: BookInsightExtractor = BookInsightExtractor(),
+) : BookMetadataParser {
     override suspend fun parse(file: PlatformFile, extension: String, storedFilePath: String): BookMetadata {
         val fallbackTitle = file.displayName
             .substringBeforeLast('.', missingDelimiterValue = file.displayName)
             .ifBlank { "未命名" }
         val epubMetadata = epubMetadataExtractor.extract(storedFilePath, extension)
+        val insight = bookInsightExtractor.extract(
+            bookFilePath = storedFilePath,
+            format = extension,
+            fileName = file.displayName,
+        )
         val title = epubMetadata?.title?.takeIf { it.isNotBlank() } ?: fallbackTitle
         return BookMetadata(
             title = title,
-            author = epubMetadata?.author?.takeIf { it.isNotBlank() },
-            metadataJson = buildLocalImportMetadataJson(extension, epubMetadata),
-        )
+            author = epubMetadata?.author?.takeIf { it.isNotBlank() }
+                ?: insight?.authorHint?.takeIf { it.isNotBlank() },
+            metadataJson = buildLocalImportMetadataJson(extension, epubMetadata, insight),
+        ).also { metadata ->
+            ToreadClientLog.info(
+                "import",
+                "import.insight_extracted",
+                "format" to extension,
+                "source" to insight?.descriptionSource?.storedValue,
+                "description_chars" to insight?.description?.length,
+                "tags" to insight?.subjects?.size,
+                "series" to (insight?.series != null),
+                "author_hint" to (insight?.authorHint != null),
+                "title" to (epubMetadata?.title != null),
+            )
+        }
     }
 }
 
@@ -235,6 +259,32 @@ internal fun buildLocalImportMetadataJson(extension: String, epubMetadata: EpubI
             }
         },
     )
+
+/**
+ * The metadata JSON a fresh import writes: the import metadata, the extracted candidate insight,
+ * and — only for a brand-new book, which has nothing to lose — the description prefilled into 简介.
+ *
+ * Only the description is ever filled automatically: categories stay suggestions on the book info
+ * page, because a wrong category is worse than an empty one. A later pass over an existing book must
+ * not come through here either; it keeps whatever the reader already wrote.
+ */
+internal fun buildLocalImportMetadataJson(
+    extension: String,
+    epubMetadata: EpubImportMetadata?,
+    insight: BookInsight?,
+): String {
+    val base = buildLocalImportMetadataJson(extension, epubMetadata)
+    val withInsight = encodeStoredBookInsight(metadataJson = base, insight = insight)
+    val prefill = insight.toPrefilledAnnotations() ?: return withInsight
+    return encodeBookLocalAnnotations(metadataJson = withInsight, annotations = prefill)
+}
+
+/** The description a fresh import may show right away, or null when there is nothing to fill. */
+private fun BookInsight?.toPrefilledAnnotations(): BookLocalAnnotations? {
+    val description = this?.description?.trim().orEmpty()
+    if (description.isEmpty()) return null
+    return BookLocalAnnotations(notes = description)
+}
 
 expect class PlatformImportClock() : ImportClock
 

@@ -1,5 +1,8 @@
 package com.example.toread.settings
 
+import com.example.toread.categories.BookCategoryEntry
+import com.example.toread.categories.encodeCategoryEntries
+import com.example.toread.categories.parseCategoryEntries
 import com.example.toread.database.ToreadDatabase
 import com.example.toread.progress.PlatformProgressClock
 import com.example.toread.progress.ProgressClock
@@ -174,6 +177,25 @@ class LocalSettingsRepository(
             ) ?: PdfReaderMode.PagedHorizontal,
         )
 
+    /**
+     * The reader's own `关键词=分类` rules for the local category suggestions, and the categories
+     * this device has already learned from the reader's own edits. Both are device-level: they
+     * describe how this reader likes their shelf arranged, so they are never synced.
+     */
+    fun categoryDictionary(): List<BookCategoryEntry> =
+        parseCategoryEntries(readSetting(CategoryDictionaryKey))
+
+    fun setCategoryDictionary(entries: List<BookCategoryEntry>) {
+        saveSetting(CategoryDictionaryKey, encodeCategoryEntries(entries))
+    }
+
+    fun categoryMemory(): List<BookCategoryEntry> =
+        parseCategoryEntries(readSetting(CategoryMemoryKey))
+
+    fun setCategoryMemory(entries: List<BookCategoryEntry>) {
+        saveSetting(CategoryMemoryKey, encodeCategoryEntries(entries))
+    }
+
     fun setDynamicColorEnabled(enabled: Boolean) {
         saveSetting(DynamicColorKey, enabled.toString())
     }
@@ -327,6 +349,8 @@ class LocalSettingsRepository(
         const val ReaderNightModeKey = "reader.night_mode_enabled"
         const val ReaderNightFollowSystemKey = "reader.night_mode_follow_system"
         const val PinnedBooksKey = "bookshelf.pinned_hashes"
+        const val CategoryDictionaryKey = "library.category_dictionary"
+        const val CategoryMemoryKey = "library.category_memory"
         const val PdfAndroidLandscapeDoublePageKey =
             "reader.pdf.android.landscape_double_page_enabled"
         const val PdfAndroidVolumeKeysKey = "reader.pdf.android.volume_keys_enabled"

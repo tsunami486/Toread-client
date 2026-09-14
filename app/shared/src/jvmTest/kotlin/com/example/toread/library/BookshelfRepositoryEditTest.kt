@@ -2,6 +2,7 @@ package com.example.toread.library
 
 import app.cash.sqldelight.driver.jdbc.sqlite.JdbcSqliteDriver
 import com.example.toread.database.ToreadDatabase
+import com.example.toread.metadata.BookLocalAnnotations
 import com.example.toread.progress.ProgressClock
 import kotlinx.coroutines.runBlocking
 import kotlin.test.Test

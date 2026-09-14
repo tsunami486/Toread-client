@@ -456,6 +456,7 @@ fun ToreadApp() {
                 if (includeLocalRefresh) {
                     bookshelfRepository?.refreshMissingEpubCovers()
                     bookshelfRepository?.refreshMissingEpubMetadata()
+                    bookshelfRepository?.backfillMissingBookInsights()
                     bookshelfRepository?.ensurePendingBookMetadataQueued()
                 }
                 val summary = if (includeRemoteSync) {
@@ -881,6 +882,7 @@ fun ToreadApp() {
                         ToreadScreen.BookInfo -> BookInfoPage(
                             book = selectedBook,
                             bookshelfRepository = bookshelfRepository,
+                            settingsRepository = settingsRepository,
                             onSaved = {
                                 refreshKey++
                                 screen = ToreadScreen.Bookshelf

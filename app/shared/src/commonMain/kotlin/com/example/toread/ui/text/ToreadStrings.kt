@@ -233,7 +233,16 @@ object ToreadStrings {
     const val BookInfoTitleLabel = "书名"
     const val BookInfoAuthorLabel = "作者"
     const val BookInfoTagsLabel = "分类 / 标签"
-    const val BookInfoTagsPlaceholder = "用逗号分隔，例如：悬疑, 仙侠, 连载"
+    const val BookInfoTagsEmptyHint = "尚未设置分类，点击右侧箭头选择"
+    const val BookInfoTagsExpandHint = "展开全部分类"
+    const val BookInfoTagsCollapseHint = "收起分类"
+    const val BookInfoTagsCustomChip = "＋ 自定义"
+    const val BookInfoTagsCustomTitle = "添加自定义标签"
+    const val BookInfoTagsCustomLabel = "标签"
+    const val BookInfoTagsCustomPlaceholder = "例如：借来的、在读"
+    const val BookInfoTagsCustomEmpty = "请输入标签内容。"
+
+    fun bookInfoTagsCustomTooLong(maxLength: Int): String = "标签请控制在 $maxLength 字以内。"
     const val BookInfoNotesLabel = "自定义备注 / 简介"
     const val BookInfoNotesPlaceholder = "可在此记录个人阅读备注或粘贴书籍简介…"
     const val BookInfoTitlePlaceholder = "输入书名"
@@ -401,6 +410,32 @@ object ToreadStrings {
     const val BookshelfLayoutDescription = "书架以网格或列表显示。"
     const val BookshelfLayoutGrid = "网格"
     const val BookshelfLayoutList = "列表"
+
+    // Category lexicon: the reader's own keyword rules and what the app has learned from them
+    const val SettingsCategoryLexicon = "分类词典"
+    const val SettingsCategoryLexiconDescription = "本地关键词规则与已记住的分类"
+    const val CategoryLexiconIntro =
+        "分类词典是本地规则库：每条规则是「关键词➔分类」。内置规则始终生效，添加的规则优先级更高。"
+    const val CategoryLexiconBuiltInTitle = "内置规则"
+    const val CategoryLexiconCustomTitle = "我的规则"
+    const val CategoryLexiconCustomEmpty = "还没有自定义规则，内置词典仍会生效。"
+    const val CategoryLexiconAdd = "添加规则"
+    const val CategoryLexiconSave = "添加"
+    const val CategoryLexiconAddTitle = "添加分类规则"
+    const val CategoryLexiconKeywordLabel = "关键词"
+    const val CategoryLexiconKeywordPlaceholder = "例如：魔药"
+    const val CategoryLexiconCategoryLabel = "分类"
+    const val CategoryLexiconCategoryPlaceholder = "例如：奇幻"
+    const val CategoryLexiconInvalid = "请填写关键词与分类。"
+    const val CategoryLexiconRemoveHint = "删除这条规则"
+    const val CategoryLexiconMemoryTitle = "已记住的分类"
+    const val CategoryLexiconMemoryEmpty =
+        "还没有记住任何分类。给书籍填好分类后，同作者或同系列的书会得到相同建议。"
+    const val CategoryLexiconMemoryClear = "清空记忆"
+    const val CategoryLexiconMemoryCleared = "已清空分类记忆。"
+
+    fun categoryLexiconBuiltInHint(categoryCount: Int, keywordCount: Int): String =
+        "共 $categoryCount 类、$keywordCount 个关键词，内置规则不可删除；同一条关键词以你的规则为准。"
     const val SwitchNightModeTitle = "切换夜间模式"
     const val SwitchNightModeFollowSystemMessage =
         "手动切换将关闭「夜间模式跟随系统」功能，可在「设置 - 主题与色彩」中重新打开。"
