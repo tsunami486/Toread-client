@@ -44,6 +44,7 @@ internal object ToreadSymbols {
     val Menu = Res.drawable.material_symbol_rounded_menu
     val MenuBook = Res.drawable.material_symbol_rounded_menu_book
     val Palette = Res.drawable.material_symbol_rounded_palette
+    val Photo = Res.drawable.material_symbol_rounded_photo
     val PhotoCamera = Res.drawable.material_symbol_rounded_photo_camera
     val Refresh = Res.drawable.material_symbol_rounded_refresh
     val Remove = Res.drawable.material_symbol_rounded_remove
