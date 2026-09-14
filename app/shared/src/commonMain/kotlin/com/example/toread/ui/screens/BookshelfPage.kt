@@ -880,7 +880,7 @@ private fun BookCard(
                     onLongClick = { menuExpanded = true },
                     onLongClickLabel = ToreadStrings.EditBookInfo,
                 )
-                .padding(14.dp),
+                .padding(horizontal = 14.dp, vertical = 12.dp),
             horizontalArrangement = Arrangement.spacedBy(16.dp),
             verticalAlignment = Alignment.Top,
         ) {
@@ -897,7 +897,7 @@ private fun BookCard(
                     .fillMaxHeight()
                     .weight(1f, fill = false)
                     .widthIn(max = ListBookDetailsMaxWidth),
-                verticalArrangement = Arrangement.spacedBy(if (useCompactTextLayout) 2.dp else 7.dp),
+                verticalArrangement = Arrangement.spacedBy(if (useCompactTextLayout) 2.dp else 4.dp),
             ) {
                 Text(
                     book.title,
@@ -916,25 +916,36 @@ private fun BookCard(
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
                 )
-                Text(
-                    text = book.progressLabel(),
-                    color = MaterialTheme.colorScheme.primary,
-                    fontSize = 14.sp,
-                    lineHeight = 17.sp,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                )
-                ProgressLine(progress = book.progress)
+                // 已读 XX% and the bar share one row: the line that used to be spent on the bar alone
+                // is what lets the note below show one more line inside the fixed card height.
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text(
+                        text = book.progressLabel(),
+                        color = MaterialTheme.colorScheme.primary,
+                        fontSize = 14.sp,
+                        lineHeight = 17.sp,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                    ProgressLine(
+                        progress = book.progress,
+                        modifier = Modifier.weight(1f),
+                    )
+                }
                 // The reader's own note for this book, when it has one; the list card has room for it
-                // under the progress line that the grid card does not.
+                // under the progress line that the grid card does not. Its 14sp line height is part of
+                // how three lines fit next to a two-line title inside the fixed card height.
                 book.localNotes.takeIf { it.isNotBlank() }?.let { note ->
-                    Spacer(modifier = Modifier.height(2.dp))
                     Text(
                         text = note,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                         fontSize = 12.sp,
-                        lineHeight = 15.sp,
-                        maxLines = if (useCompactTextLayout) 1 else 2,
+                        lineHeight = 14.sp,
+                        maxLines = if (useCompactTextLayout) 2 else 3,
                         overflow = TextOverflow.Ellipsis,
                     )
                 }
