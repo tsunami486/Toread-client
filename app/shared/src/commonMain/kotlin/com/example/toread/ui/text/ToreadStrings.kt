@@ -415,7 +415,7 @@ object ToreadStrings {
     const val SettingsCategoryLexicon = "分类词典"
     const val SettingsCategoryLexiconDescription = "本地关键词规则与已记住的分类"
     const val CategoryLexiconIntro =
-        "分类词典是本地规则库：每条规则是「关键词➔分类」。内置规则始终生效，添加的规则优先级更高。"
+        "分类词典是本地规则库：每条规则是「关键词 ➔ 分类」。内置规则始终生效，添加的规则优先级更高。"
     const val CategoryLexiconBuiltInTitle = "内置规则"
     const val CategoryLexiconCustomTitle = "我的规则"
     const val CategoryLexiconCustomEmpty = "还没有自定义规则，内置词典仍会生效。"
@@ -435,7 +435,7 @@ object ToreadStrings {
     const val CategoryLexiconMemoryCleared = "已清空分类记忆。"
 
     fun categoryLexiconBuiltInHint(categoryCount: Int, keywordCount: Int): String =
-        "共 $categoryCount 类、$keywordCount 个关键词，内置规则不可删除；同一条关键词以你的规则为准。"
+        "共 $categoryCount 类、$keywordCount 个关键词，内置规则不可删除；同一条关键词以自定义的规则为准。"
     const val SwitchNightModeTitle = "切换夜间模式"
     const val SwitchNightModeFollowSystemMessage =
         "手动切换将关闭「夜间模式跟随系统」功能，可在「设置 - 主题与色彩」中重新打开。"
