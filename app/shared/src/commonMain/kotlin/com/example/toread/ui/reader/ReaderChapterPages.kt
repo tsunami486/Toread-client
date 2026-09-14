@@ -43,19 +43,33 @@ internal fun chapterPagePosition(
  * The panel keeps showing [target] until the reader reports it, because the seek is asynchronous:
  * dropping the released value immediately would flash the thumb back to the page the reader still
  * displays before the requested page arrives. [chapterOrd] scopes the wait to the chapter the seek was
- * made in, so jumping to another chapter can never leave a stale target behind.
+ * made in, so jumping to another chapter can never leave a stale target behind, and [originPage] is the
+ * page the reader was showing at release: while it still shows that page the reader cannot really have
+ * left the chapter, so a mismatching ordinal must not drop the latch either.
  */
 internal data class ChapterPageSeek(
     val chapterOrd: Int,
     val target: Int,
+    val originPage: Int? = null,
 )
 
-/** True once the reader published the seek's target or left the chapter the seek was made in. */
+/** True once the reader published the seek's target, or moved on in a way that retires the wait. */
 internal fun chapterPageSeekSettled(
     seek: ChapterPageSeek,
     currentChapterOrd: Int,
     chapterPages: ReaderChapterPagePosition?,
-): Boolean = currentChapterOrd != seek.chapterOrd || chapterPages?.pageNumber == seek.target
+): Boolean = when {
+    // No measurement yet: keep waiting instead of flashing back.
+    chapterPages == null -> false
+    // The reader published the requested page.
+    chapterPages.pageNumber == seek.target -> true
+    // Still on the page the seek was released from: the reader has not moved, so a chapter mismatch
+    // cannot be real yet and the released page has to stay on screen.
+    chapterPages.pageNumber == seek.originPage -> false
+    // The chapter really changed, so the pending target belongs to a chapter the reader has left.
+    currentChapterOrd != seek.chapterOrd -> true
+    else -> false
+}
 
 /**
  * Page the reading panel shows: the thumb being dragged, the page a released seek is still waiting for,

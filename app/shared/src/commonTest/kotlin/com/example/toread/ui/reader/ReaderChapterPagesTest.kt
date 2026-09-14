@@ -80,6 +80,21 @@ class ReaderChapterPagesTest {
         assertEquals(12, chapterSliderPage(null, seek, ReaderChapterPagePosition(12, 31)))
     }
 
+    @Test
+    fun aMismatchingOrdinalCannotRetireASeekTheReaderHasNotMovedFor() {
+        // The row a stale release would produce: an ordinal that no longer matches, released while the
+        // reader was still showing page 5.
+        val seek = ChapterPageSeek(chapterOrd = 4, target = 12, originPage = 5)
+
+        // The reader has not moved off the released page, so the latch has to hold: dropping it here is
+        // exactly the flash back to the page the reader still displays.
+        assertEquals(false, chapterPageSeekSettled(seek, 5, ReaderChapterPagePosition(5, 31)))
+        // Once the reader really moved, the mismatching ordinal retires the wait.
+        assertEquals(true, chapterPageSeekSettled(seek, 5, ReaderChapterPagePosition(1, 12)))
+        // Publishing the target always settles it.
+        assertEquals(true, chapterPageSeekSettled(seek, 5, ReaderChapterPagePosition(12, 31)))
+    }
+
     private fun page(chapterOrd: Int): ReaderPageSlice =
         ReaderPageSlice(
             chapterTitle = "第 ${chapterOrd + 1} 章",

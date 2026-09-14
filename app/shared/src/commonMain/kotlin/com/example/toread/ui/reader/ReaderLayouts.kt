@@ -57,6 +57,7 @@ import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -951,7 +952,11 @@ private fun BoxScope.AndroidReaderBottomPanel(
                     onDragPage = { draggedPage = it },
                     onSeekChapterPage = { target ->
                         // Hold the released page until the reader publishes it, then follow the reader.
-                        pendingSeek = ChapterPageSeek(chapterOrd = currentChapterOrd, target = target)
+                        pendingSeek = ChapterPageSeek(
+                            chapterOrd = currentChapterOrd,
+                            target = target,
+                            originPage = chapterPages?.pageNumber,
+                        )
                         onSeekChapterPage?.invoke(target)
                     },
                 )
@@ -1006,6 +1011,10 @@ private fun ReaderChapterStepButton(
  * The seek is committed on release only, so dragging never restarts pagination per frame, and the
  * passed part is drawn up to the circle's centre where the circle hides the seam.
  *
+ * Its callbacks and the chapter position are read through `rememberUpdatedState`: this handler lives as
+ * long as the slider is composed, and a captured callback would commit a seek built from a past
+ * composition — which is what made the thumb flash back to the page the reader still displayed.
+ *
  * Falls back to the book-wide progress bar while the chapter page count is still being measured.
  */
 @Composable
@@ -1035,27 +1044,42 @@ private fun ChapterPageSlider(
     val activeTrackColor = MaterialTheme.colorScheme.primary
     val inactiveTrackColor = MaterialTheme.colorScheme.primary.copy(alpha = 0.24f)
     val thumbSize = ReaderSliderThumbSize
-    val pageCount = chapterPages.pageCount
-    val fraction = ((shownPage - 1).toFloat() / (pageCount - 1).toFloat()).coerceIn(0f, 1f)
+    val fraction = ((shownPage - 1).toFloat() / (chapterPages.pageCount - 1).toFloat())
+        .coerceIn(0f, 1f)
+
+    // The gesture handler below stays alive for as long as the slider is composed, so everything it
+    // reads has to go through `rememberUpdatedState`. Capturing the parameters directly meant the
+    // handler kept the callbacks and the chapter position from the composition it happened to start in:
+    // a release after the reader had moved on was committed with a chapter ordinal of the past, the
+    // panel's latch recognised that as "another chapter" and dropped itself in the same frame, and the
+    // thumb flashed back to the page the reader was still showing. Material's own slider avoided this
+    // because it always invokes the latest callbacks; this one has to say so explicitly.
+    val currentChapterPages by rememberUpdatedState(chapterPages)
+    val currentOnDragPage by rememberUpdatedState(onDragPage)
+    val currentOnSeekChapterPage by rememberUpdatedState(onSeekChapterPage)
 
     Box(
         modifier = Modifier
             .fillMaxWidth()
             .height(ReaderSliderTouchHeight)
-            .pointerInput(pageCount) {
+            // Not keyed on the page count: restarting the handler would abort a drag in progress, and
+            // the live values come from the states above instead.
+            .pointerInput(Unit) {
                 val radius = thumbSize.toPx() / 2f
-                val trackWidth = size.width.toFloat()
-                val travel = (trackWidth - 2f * radius).coerceAtLeast(1f)
-                fun fractionAt(x: Float): Float = ((x - radius) / travel).coerceIn(0f, 1f)
-                fun pageAt(x: Float): Int =
-                    (1f + fractionAt(x) * (pageCount - 1).toFloat()).roundToInt()
-                        .coerceIn(1, pageCount)
+
+                fun pageAt(x: Float): Int {
+                    val count = currentChapterPages?.pageCount ?: 1
+                    if (count <= 1) return 1
+                    val travel = (size.width.toFloat() - 2f * radius).coerceAtLeast(1f)
+                    val fraction = ((x - radius) / travel).coerceIn(0f, 1f)
+                    return (1f + fraction * (count - 1).toFloat()).roundToInt().coerceIn(1, count)
+                }
 
                 awaitEachGesture {
                     val down = awaitFirstDown(requireUnconsumed = false)
-                    onDragPage(pageAt(down.position.x))
+                    currentOnDragPage(pageAt(down.position.x))
                     val completed = drag(down.id) { change ->
-                        onDragPage(pageAt(change.position.x))
+                        currentOnDragPage(pageAt(change.position.x))
                         change.consume()
                     }
                     val target = if (completed) {
@@ -1063,9 +1087,9 @@ private fun ChapterPageSlider(
                     } else {
                         null
                     }
-                    onDragPage(null)
-                    if (target != null && target != chapterPages.pageNumber) {
-                        onSeekChapterPage(target)
+                    currentOnDragPage(null)
+                    if (target != null && target != currentChapterPages?.pageNumber) {
+                        currentOnSeekChapterPage?.invoke(target)
                     }
                 }
             },
