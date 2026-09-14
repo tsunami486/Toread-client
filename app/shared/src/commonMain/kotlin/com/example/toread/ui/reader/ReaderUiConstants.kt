@@ -11,10 +11,13 @@ import androidx.compose.ui.unit.sp
 internal val ReaderSheetCornerRadius = 20.dp
 
 /**
- * The reading panel's slider thumb: a plain white circle instead of the Material bar. The track uses
- * the same height, so the thumb and the passed part of the track read as one capsule.
+ * The reading panel's slider thumb: a plain white circle instead of the Material bar. The circle
+ * travels between the track's rounded ends, so it is flush with either end at the extremes.
  */
 internal val ReaderSliderThumbSize = 18.dp
+
+/** Touch area of the reading panel's slider: taller than the track so the capsule is easy to grab. */
+internal val ReaderSliderTouchHeight = 44.dp
 
 /** How long the panel keeps a released chapter-page seek pinned before following the reader again. */
 internal const val ReaderChapterSeekLatchMillis = 2_000L

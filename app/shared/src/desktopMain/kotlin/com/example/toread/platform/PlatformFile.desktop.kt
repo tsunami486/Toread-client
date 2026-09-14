@@ -22,6 +22,25 @@ actual class PlatformFilePicker actual constructor() {
     }
 }
 
+actual class PlatformImagePicker actual constructor() {
+    actual suspend fun pickImage(): ImagePickResult {
+        val dialog = FileDialog(null as Frame?, "选择封面图片", FileDialog.LOAD).apply {
+            isMultipleMode = false
+            file = CoverImageExtensions.joinToString(";") { "*.$it" }
+            isVisible = true
+        }
+        val directory = dialog.directory
+        val name = dialog.file ?: return ImagePickResult.Cancelled
+        val path = Paths.get(directory ?: "", name).toAbsolutePath().toString()
+        return ImagePickResult.Picked(platformFileFromPath(path))
+    }
+
+    /** Desktop has no gallery permission to grant. */
+    actual fun openAppSettings() = Unit
+}
+
+private val CoverImageExtensions = listOf("jpg", "jpeg", "png", "webp", "gif")
+
 /**
  * Describes a local file for the importer. Shared by the file picker and the drag-and-drop target so a
  * dropped file arrives with exactly the same name, MIME type and size a picked one does.

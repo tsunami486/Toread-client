@@ -8,6 +8,12 @@ object AndroidPlatformFilePickerBridge {
     var pickFiles: (suspend (List<String>) -> List<PlatformFile>)? = null
 }
 
+/** Host wiring for the gallery picker; the activity owns the launchers and the permission request. */
+object AndroidPlatformImagePickerBridge {
+    var pickImage: (suspend () -> ImagePickResult)? = null
+    var openAppSettings: (() -> Unit)? = null
+}
+
 object AndroidFileAccessBridge {
     var openInputStream: ((PlatformFile) -> java.io.InputStream?)? = null
 }
@@ -15,6 +21,15 @@ object AndroidFileAccessBridge {
 actual class PlatformFilePicker actual constructor() {
     actual suspend fun pickFiles(extensions: List<String>): List<PlatformFile> =
         AndroidPlatformFilePickerBridge.pickFiles?.invoke(extensions).orEmpty()
+}
+
+actual class PlatformImagePicker actual constructor() {
+    actual suspend fun pickImage(): ImagePickResult =
+        AndroidPlatformImagePickerBridge.pickImage?.invoke() ?: ImagePickResult.Cancelled
+
+    actual fun openAppSettings() {
+        AndroidPlatformImagePickerBridge.openAppSettings?.invoke()
+    }
 }
 
 actual class SecureTokenStore actual constructor() {

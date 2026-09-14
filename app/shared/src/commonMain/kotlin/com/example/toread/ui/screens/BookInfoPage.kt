@@ -26,9 +26,14 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.ListItem
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -44,6 +49,8 @@ import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.graphics.PathEffect
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.platform.LocalFocusManager
+import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
@@ -56,9 +63,10 @@ import com.example.toread.library.BookLocalAnnotations
 import com.example.toread.library.BookshelfBook
 import com.example.toread.library.BookshelfRepository
 import com.example.toread.platform.BookFileStorage
+import com.example.toread.platform.ImagePickResult
 import com.example.toread.platform.PlatformBackHandler
 import com.example.toread.platform.PlatformFile
-import com.example.toread.platform.PlatformFilePicker
+import com.example.toread.platform.PlatformImagePicker
 import com.example.toread.ui.icons.ToreadSymbolIcon
 import com.example.toread.ui.icons.ToreadSymbols
 import com.example.toread.ui.text.ToreadStrings
@@ -85,37 +93,72 @@ internal fun BookInfoPage(
     onSaved: () -> Unit,
     onDelete: (BookshelfBook) -> Unit = {},
 ) {
-    PlatformBackHandler(enabled = true, onBack = onBack)
-
     val scope = rememberCoroutineScope()
+    val focusManager = LocalFocusManager.current
+    val keyboardController = LocalSoftwareKeyboardController.current
+
     var title by remember(book?.bookHash) { mutableStateOf(book?.title.orEmpty()) }
     var author by remember(book?.bookHash) { mutableStateOf(book?.author.orEmpty()) }
     var tags by remember(book?.bookHash) { mutableStateOf(book?.localTags.orEmpty()) }
     var notes by remember(book?.bookHash) { mutableStateOf(book?.localNotes.orEmpty()) }
-    var pickedCover by remember(book?.bookHash) { mutableStateOf<PlatformFile?>(null) }
-    var useGeneratedCover by remember(book?.bookHash) { mutableStateOf(false) }
+    // The cover to save: the book's own file path, a freshly copied image, or null for the generated one.
+    var coverPath by remember(book?.bookHash) { mutableStateOf(book?.coverPath) }
     var saving by remember(book?.bookHash) { mutableStateOf(false) }
     var message by remember(book?.bookHash) { mutableStateOf<String?>(null) }
+    var coverSheetVisible by remember(book?.bookHash) { mutableStateOf(false) }
+    var permissionDialogVisible by remember(book?.bookHash) { mutableStateOf(false) }
+    var confirmSaveVisible by remember(book?.bookHash) { mutableStateOf(false) }
 
     val savingEnabled = book != null && bookshelfRepository != null && title.isNotBlank() && !saving
     val previewBook = book?.let { current ->
         current.copy(
             title = title.ifBlank { current.title },
-            coverPath = when {
-                useGeneratedCover -> null
-                pickedCover != null -> pickedCover?.path
-                else -> current.coverPath
-            },
+            coverPath = coverPath,
         )
     }
+    val hasUnsavedChanges = book != null && (
+        title != book.title ||
+            author != book.author.orEmpty() ||
+            tags != book.localTags ||
+            notes != book.localNotes ||
+            coverPath != book.coverPath
+        )
 
+    /** Leaving the page asks about unsaved edits instead of dropping them silently. */
+    fun requestBack() {
+        keyboardController?.hide()
+        focusManager.clearFocus()
+        if (hasUnsavedChanges && !saving) confirmSaveVisible = true else onBack()
+    }
+
+    PlatformBackHandler(enabled = true, onBack = ::requestBack)
+
+    /**
+     * A picked image is copied into the book's own directory right away: on Android the picker returns a
+     * content URI, which the cover loader cannot read, so this is also what makes the new cover show up
+     * on this page immediately. Cancelling the page leaves only an unused file in the book's directory.
+     */
     fun pickCover() {
+        val target = book ?: return
+        coverSheetVisible = false
         scope.launch {
-            val picked = PlatformFilePicker().pickFiles(CoverImageExtensions).firstOrNull()
-            if (picked != null) {
-                pickedCover = picked
-                useGeneratedCover = false
-                message = null
+            when (val result = PlatformImagePicker().pickImage()) {
+                is ImagePickResult.Picked -> {
+                    val stored = BookFileStorage().copyCoverToBookDirectory(
+                        file = result.file,
+                        bookHash = target.bookHash,
+                        extension = result.file.coverExtension(),
+                    )
+                    if (stored == null) {
+                        message = ToreadStrings.BookInfoCoverFailed
+                    } else {
+                        coverPath = stored
+                        message = null
+                    }
+                }
+
+                ImagePickResult.PermissionRequired -> permissionDialogVisible = true
+                ImagePickResult.Cancelled -> Unit
             }
         }
     }
@@ -124,26 +167,12 @@ internal fun BookInfoPage(
         val target = book ?: return
         val repository = bookshelfRepository ?: return
         if (!savingEnabled) return
+        keyboardController?.hide()
+        focusManager.clearFocus()
         saving = true
         message = null
         scope.launch {
-            val storedCover = when {
-                pickedCover == null -> if (useGeneratedCover) null else target.coverPath
-                else -> {
-                    val picked = requireNotNull(pickedCover)
-                    BookFileStorage().copyCoverToBookDirectory(
-                        file = picked,
-                        bookHash = target.bookHash,
-                        extension = picked.coverExtension(),
-                    )
-                }
-            }
-            if (pickedCover != null && storedCover == null) {
-                saving = false
-                message = ToreadStrings.BookInfoCoverFailed
-                return@launch
-            }
-
+            // The cover was already copied into the book's directory when it was picked.
             val saved = repository.updateBookInfo(
                 bookHash = target.bookHash,
                 title = title,
@@ -155,7 +184,7 @@ internal fun BookInfoPage(
                 message = ToreadStrings.BookInfoSaveFailed
                 return@launch
             }
-            repository.updateBookCoverPath(target.bookHash, storedCover)
+            repository.updateBookCoverPath(target.bookHash, coverPath)
             saving = false
             onSaved()
         }
@@ -173,21 +202,29 @@ internal fun BookInfoPage(
                     WideBookInfoTopBar(
                         savingEnabled = savingEnabled,
                         saving = saving,
-                        onBack = onBack,
+                        onBack = ::requestBack,
                         onSave = ::save,
                     )
                 } else {
                     CompactBookInfoTopBar(
                         savingEnabled = savingEnabled,
                         saving = saving,
-                        onBack = onBack,
+                        onBack = ::requestBack,
                         onSave = ::save,
                     )
                 }
                 Column(
                     modifier = Modifier
                         .fillMaxSize()
-                        .verticalScroll(rememberScrollState()),
+                        .verticalScroll(rememberScrollState())
+                        // A tap that no field claimed puts the keyboard away and drops the selection.
+                        .clickable(
+                            interactionSource = remember { MutableInteractionSource() },
+                            indication = null,
+                        ) {
+                            keyboardController?.hide()
+                            focusManager.clearFocus()
+                        },
                     horizontalAlignment = Alignment.CenterHorizontally,
                 ) {
                     Column(
@@ -211,20 +248,14 @@ internal fun BookInfoPage(
                                 onNotesChange = { notes = it },
                                 onPickCover = ::pickCover,
                                 onUseGeneratedCover = {
-                                    pickedCover = null
-                                    useGeneratedCover = true
+                                    coverPath = null
                                     message = null
                                 },
                             )
                         } else {
                             CompactCoverSection(
                                 book = previewBook,
-                                onPickCover = ::pickCover,
-                                onUseGeneratedCover = {
-                                    pickedCover = null
-                                    useGeneratedCover = true
-                                    message = null
-                                },
+                                onOpenCoverActions = { coverSheetVisible = true },
                             )
                             BookInfoFields(
                                 title = title,
@@ -280,6 +311,114 @@ internal fun BookInfoPage(
                 }
             }
         }
+
+        if (coverSheetVisible) {
+            CoverActionSheet(
+                onDismiss = { coverSheetVisible = false },
+                onPickFromGallery = ::pickCover,
+                onUseGeneratedCover = {
+                    coverSheetVisible = false
+                    coverPath = null
+                    message = null
+                },
+            )
+        }
+
+        if (permissionDialogVisible) {
+            AlertDialog(
+                onDismissRequest = { permissionDialogVisible = false },
+                title = { Text(ToreadStrings.GalleryPermissionTitle) },
+                text = { Text(ToreadStrings.GalleryPermissionMessage) },
+                confirmButton = {
+                    TextButton(
+                        onClick = {
+                            permissionDialogVisible = false
+                            PlatformImagePicker().openAppSettings()
+                        },
+                    ) {
+                        Text(ToreadStrings.GalleryPermissionGrant)
+                    }
+                },
+                dismissButton = {
+                    TextButton(onClick = { permissionDialogVisible = false }) {
+                        Text(ToreadStrings.DialogCancel)
+                    }
+                },
+            )
+        }
+
+        if (confirmSaveVisible) {
+            AlertDialog(
+                onDismissRequest = { confirmSaveVisible = false },
+                title = { Text(ToreadStrings.BookInfoUnsavedTitle) },
+                text = { Text(ToreadStrings.BookInfoUnsavedMessage) },
+                confirmButton = {
+                    TextButton(
+                        onClick = {
+                            confirmSaveVisible = false
+                            save()
+                        },
+                    ) {
+                        Text(ToreadStrings.BookInfoSave)
+                    }
+                },
+                dismissButton = {
+                    Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                        TextButton(
+                            onClick = {
+                                confirmSaveVisible = false
+                                onBack()
+                            },
+                        ) {
+                            Text(ToreadStrings.BookInfoDiscardChanges)
+                        }
+                        TextButton(onClick = { confirmSaveVisible = false }) {
+                            Text(ToreadStrings.DialogCancel)
+                        }
+                    }
+                },
+            )
+        }
+    }
+}
+
+/** The cover actions live behind the cover itself now: tapping it offers these two choices. */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun CoverActionSheet(
+    onDismiss: () -> Unit,
+    onPickFromGallery: () -> Unit,
+    onUseGeneratedCover: () -> Unit,
+) {
+    ModalBottomSheet(onDismissRequest = onDismiss) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(bottom = 24.dp),
+        ) {
+            ListItem(
+                headlineContent = { Text(ToreadStrings.BookInfoCoverPick) },
+                supportingContent = { Text(ToreadStrings.BookInfoCoverPickHint) },
+                leadingContent = {
+                    ToreadSymbolIcon(
+                        symbol = ToreadSymbols.PhotoCamera,
+                        contentDescription = null,
+                    )
+                },
+                modifier = Modifier.clickable(onClick = onPickFromGallery),
+            )
+            ListItem(
+                headlineContent = { Text(ToreadStrings.BookInfoCoverGenerated) },
+                supportingContent = { Text(ToreadStrings.BookInfoCoverGeneratedHint) },
+                leadingContent = {
+                    ToreadSymbolIcon(
+                        symbol = ToreadSymbols.PhotoCamera,
+                        contentDescription = null,
+                    )
+                },
+                modifier = Modifier.clickable(onClick = onUseGeneratedCover),
+            )
+        }
     }
 }
 
@@ -324,7 +463,6 @@ private fun CompactBookInfoTopBar(
             )
             Spacer(modifier = Modifier.width(12.dp))
         }
-        ShelfDivider()
     }
 }
 
@@ -387,7 +525,6 @@ private fun WideBookInfoTopBar(
                 )
             }
         }
-        HorizontalHairline(color = MaterialTheme.colorScheme.outlineVariant)
     }
 }
 
@@ -426,52 +563,21 @@ private fun PrimaryPillButton(
 @Composable
 private fun CompactCoverSection(
     book: BookshelfBook?,
-    onPickCover: () -> Unit,
-    onUseGeneratedCover: () -> Unit,
+    onOpenCoverActions: () -> Unit,
 ) {
     Column(
         modifier = Modifier.fillMaxWidth(),
         horizontalAlignment = Alignment.CenterHorizontally,
-        verticalArrangement = Arrangement.spacedBy(14.dp),
+        verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
         Spacer(modifier = Modifier.height(2.dp))
+        // No separate buttons: the cover itself is the control and takes the space they used to hold.
         CoverPreview(
             book = book,
-            width = 110.dp,
-            height = 148.dp,
-            cornerRadius = 6.dp,
-            onPickCover = onPickCover,
-        )
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            CoverChip(label = ToreadStrings.BookInfoCoverPick, onClick = onPickCover)
-            CoverChip(
-                label = ToreadStrings.BookInfoCoverGeneratedShort,
-                onClick = onUseGeneratedCover,
-            )
-        }
-    }
-}
-
-@Composable
-private fun CoverChip(label: String, onClick: () -> Unit) {
-    Box(
-        modifier = Modifier
-            .height(26.dp)
-            .clip(CircleShape)
-            .background(MaterialTheme.colorScheme.surfaceContainerHigh)
-            .border(
-                width = 1.dp,
-                color = MaterialTheme.colorScheme.outlineVariant,
-                shape = CircleShape,
-            )
-            .clickable(onClick = onClick)
-            .padding(horizontal = 14.dp),
-        contentAlignment = Alignment.Center,
-    ) {
-        Text(
-            text = label,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-            fontSize = 11.sp,
+            width = 150.dp,
+            height = 200.dp,
+            cornerRadius = 8.dp,
+            onClick = onOpenCoverActions,
         )
     }
 }
@@ -482,7 +588,7 @@ private fun CoverPreview(
     width: Dp,
     height: Dp,
     cornerRadius: Dp,
-    onPickCover: () -> Unit,
+    onClick: () -> Unit,
 ) {
     val interactionSource = remember { MutableInteractionSource() }
     val isHovered by interactionSource.collectIsHoveredAsState()
@@ -492,7 +598,7 @@ private fun CoverPreview(
             .width(width)
             .height(height)
             .hoverable(interactionSource = interactionSource)
-            .clickable(onClick = onPickCover),
+            .clickable(onClick = onClick),
         contentAlignment = Alignment.Center,
     ) {
         if (book != null) {
@@ -578,7 +684,7 @@ private fun WideEditorRow(
                     width = 150.dp,
                     height = 200.dp,
                     cornerRadius = 8.dp,
-                    onPickCover = onPickCover,
+                    onClick = onPickCover,
                 )
                 Column(
                     modifier = Modifier.fillMaxWidth(),
@@ -740,10 +846,12 @@ private fun BookInfoField(
                     .fillMaxWidth()
                     .onFocusChanged { focused = it.isFocused },
                 decorationBox = { innerTextField ->
-                    if (value.isEmpty()) {
+                    // The hint is background text, not content: it disappears while the field is selected
+                    // and stays quiet while it is not.
+                    if (value.isEmpty() && !focused) {
                         Text(
                             text = placeholder,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.55f),
                             fontSize = 14.sp,
                         )
                     }
@@ -921,11 +1029,6 @@ private fun HorizontalHairline(color: androidx.compose.ui.graphics.Color) {
             .height(1.dp)
             .background(color),
     )
-}
-
-@Composable
-private fun ShelfDivider() {
-    HorizontalHairline(color = MaterialTheme.colorScheme.outlineVariant)
 }
 
 /** The sheets draw both danger zones with a dashed outline; Compose needs it drawn by hand. */

@@ -5,6 +5,9 @@ import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.Orientation
+import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.foundation.gestures.awaitFirstDown
+import androidx.compose.foundation.gestures.drag
 import androidx.compose.foundation.gestures.draggable
 import androidx.compose.foundation.gestures.rememberDraggableState
 import androidx.compose.foundation.gestures.scrollBy
@@ -31,7 +34,6 @@ import androidx.compose.foundation.lazy.LazyListScope
 import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.lazy.items
-import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
@@ -43,7 +45,6 @@ import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.PlainTooltip
-import androidx.compose.material3.Slider
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TooltipAnchorPosition
@@ -62,10 +63,12 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.geometry.CornerRadius
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.Layout
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalDensity
@@ -82,6 +85,7 @@ import com.example.toread.ui.components.ScreenColumn
 import com.example.toread.ui.icons.ToreadSymbolIcon
 import com.example.toread.ui.icons.ToreadSymbols
 import com.example.toread.ui.text.ToreadStrings
+import com.example.toread.settings.ToreadAppearancePreferences
 import com.example.toread.ui.theme.ToreadTheme
 import com.example.toread.ui.theme.toreadColors
 import kotlinx.coroutines.Dispatchers
@@ -704,7 +708,8 @@ internal fun AndroidReaderLayout(
     onSeekChapterPage: ((Int) -> Unit)? = null,
     nightMode: Boolean = false,
     onToggleNightMode: (() -> Unit)? = null,
-    readerSurface: ReaderSurfaceColors = ReaderSurfaceColors.Day,
+    readerSurface: ReaderSurfaceColors = readerSurfaceColors(nightMode = false),
+    appearance: ToreadAppearancePreferences = ToreadAppearancePreferences(),
 ) {
     val typography = AndroidReaderTypography
     val systemBarInsets = rememberSystemBarInsets()
@@ -766,8 +771,14 @@ internal fun AndroidReaderLayout(
         }
 
         if (controlsVisible) {
-            // The top bar belongs to the reading surface too, so it follows the reader's own switch.
-            ToreadTheme(useDynamicColor = false, darkTheme = nightMode) {
+            // The chrome belongs to the reading surface too: it follows the reader's own day/night
+            // switch, and it uses the palette chosen in 主题与色彩 like every other screen.
+            ToreadTheme(
+                useDynamicColor = appearance.dynamicColorEnabled,
+                darkTheme = nightMode,
+                palette = appearance.palette,
+                highContrastDark = appearance.highContrastDarkTheme,
+            ) {
                 AndroidReaderTopBar(book = book, onBack = onBack)
             }
             AndroidReaderBottomPanel(
@@ -782,12 +793,18 @@ internal fun AndroidReaderLayout(
                 nightMode = nightMode,
                 onToggleNightMode = onToggleNightMode,
                 onOpenChapterList = { chapterDrawerVisible = true },
+                appearance = appearance,
             )
         }
         if (chapterDrawerVisible) {
             // Same rule as the bottom panel: the drawer belongs to the reader chrome, so it follows
             // the reader's day/night switch rather than the app theme.
-            ToreadTheme(useDynamicColor = false, darkTheme = nightMode) {
+            ToreadTheme(
+                useDynamicColor = appearance.dynamicColorEnabled,
+                darkTheme = nightMode,
+                palette = appearance.palette,
+                highContrastDark = appearance.highContrastDarkTheme,
+            ) {
                 AndroidChapterDrawer(
                     bookTitle = book.title,
                     chapters = displayedChapterEntries,
@@ -846,6 +863,7 @@ private fun BoxScope.AndroidReaderBottomPanel(
     onSeekChapterPage: ((Int) -> Unit)?,
     currentChapterOrd: Int,
     nightMode: Boolean,
+    appearance: ToreadAppearancePreferences,
     onToggleNightMode: (() -> Unit)?,
     onOpenChapterList: () -> Unit,
 ) {
@@ -874,7 +892,12 @@ private fun BoxScope.AndroidReaderBottomPanel(
         if (pendingSeek == seek) pendingSeek = null
     }
 
-    ToreadTheme(useDynamicColor = false, darkTheme = nightMode) {
+    ToreadTheme(
+        useDynamicColor = appearance.dynamicColorEnabled,
+        darkTheme = nightMode,
+        palette = appearance.palette,
+        highContrastDark = appearance.highContrastDarkTheme,
+    ) {
         Card(
             // Flush with the screen edges: only the top corners are rounded and the system bar inset is
             // paid inside the card, so no background shows through around the panel.
@@ -972,10 +995,16 @@ private fun ReaderChapterStepButton(
 }
 
 /**
- * Draggable chapter-page slider drawn as one capsule: the track and the plain white circular thumb
- * share a single height, so the part the reader has already passed runs straight into the thumb
- * instead of stopping beside it. The seek is committed on release only, so dragging never restarts
- * pagination per frame.
+ * Draggable chapter-page slider, drawn by hand instead of with `Slider`.
+ *
+ * The geometry is the point: the capsule track spans the full width and the white circle travels
+ * between the capsule's two rounded ends, so at the first page the circle's left edge sits exactly on
+ * the track's left end with no coloured part showing, and at the last page its right edge sits on the
+ * track's right end with the track filled end to end. Material's slider moves the thumb through the
+ * track's full width instead, which leaves the circle hanging half outside the track at both ends.
+ *
+ * The seek is committed on release only, so dragging never restarts pagination per frame, and the
+ * passed part is drawn up to the circle's centre where the circle hides the seam.
  *
  * Falls back to the book-wide progress bar while the chapter page count is still being measured.
  */
@@ -1005,54 +1034,64 @@ private fun ChapterPageSlider(
 
     val activeTrackColor = MaterialTheme.colorScheme.primary
     val inactiveTrackColor = MaterialTheme.colorScheme.primary.copy(alpha = 0.24f)
+    val thumbSize = ReaderSliderThumbSize
+    val pageCount = chapterPages.pageCount
+    val fraction = ((shownPage - 1).toFloat() / (pageCount - 1).toFloat()).coerceIn(0f, 1f)
 
-    Slider(
-        value = shownPage.toFloat(),
-        onValueChange = { value ->
-            onDragPage(value.roundToInt().coerceIn(1, chapterPages.pageCount))
-        },
-        valueRange = 1f..chapterPages.pageCount.toFloat(),
-        onValueChangeFinished = {
-            onDragPage(null)
-            if (shownPage != chapterPages.pageNumber) {
-                onSeekChapterPage(shownPage)
-            }
-        },
-        thumb = {
-            // No outline: the thumb is the rounded cap of the track, not a separate handle.
-            Box(
-                modifier = Modifier
-                    .size(ReaderSliderThumbSize)
-                    .background(Color.White, CircleShape),
+    Box(
+        modifier = Modifier
+            .fillMaxWidth()
+            .height(ReaderSliderTouchHeight)
+            .pointerInput(pageCount) {
+                val radius = thumbSize.toPx() / 2f
+                val trackWidth = size.width.toFloat()
+                val travel = (trackWidth - 2f * radius).coerceAtLeast(1f)
+                fun fractionAt(x: Float): Float = ((x - radius) / travel).coerceIn(0f, 1f)
+                fun pageAt(x: Float): Int =
+                    (1f + fractionAt(x) * (pageCount - 1).toFloat()).roundToInt()
+                        .coerceIn(1, pageCount)
+
+                awaitEachGesture {
+                    val down = awaitFirstDown(requireUnconsumed = false)
+                    onDragPage(pageAt(down.position.x))
+                    val completed = drag(down.id) { change ->
+                        onDragPage(pageAt(change.position.x))
+                        change.consume()
+                    }
+                    val target = if (completed) {
+                        currentEvent.changes.lastOrNull()?.position?.x?.let(::pageAt)
+                    } else {
+                        null
+                    }
+                    onDragPage(null)
+                    if (target != null && target != chapterPages.pageNumber) {
+                        onSeekChapterPage(target)
+                    }
+                }
+            },
+        contentAlignment = Alignment.Center,
+    ) {
+        Canvas(
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(thumbSize),
+        ) {
+            val radius = size.height / 2f
+            val capsule = CornerRadius(radius, radius)
+            val centerX = radius + (size.width - 2f * radius) * fraction
+            drawRoundRect(color = inactiveTrackColor, cornerRadius = capsule)
+            drawRoundRect(
+                color = activeTrackColor,
+                size = Size(width = centerX, height = size.height),
+                cornerRadius = capsule,
             )
-        },
-        track = { sliderState ->
-            val range = sliderState.valueRange
-            val fraction = (
-                (sliderState.value - range.start) / (range.endInclusive - range.start)
-                ).coerceIn(0f, 1f)
-            Canvas(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .height(ReaderSliderThumbSize),
-            ) {
-                val radius = size.height / 2f
-                val capsule = CornerRadius(radius, radius)
-                drawRoundRect(color = inactiveTrackColor, cornerRadius = capsule)
-                // The thumb travels between the capsule's rounded ends, so the passed part has to end
-                // exactly at the thumb's centre; the seam stays hidden under the thumb.
-                drawRoundRect(
-                    color = activeTrackColor,
-                    size = Size(
-                        width = radius + (size.width - 2f * radius) * fraction,
-                        height = size.height,
-                    ),
-                    cornerRadius = capsule,
-                )
-            }
-        },
-        modifier = Modifier.fillMaxWidth(),
-    )
+            drawCircle(
+                color = Color.White,
+                radius = radius,
+                center = Offset(centerX, radius),
+            )
+        }
+    }
 }
 
 @Composable

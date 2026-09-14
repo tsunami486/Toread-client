@@ -925,6 +925,19 @@ private fun BookCard(
                     overflow = TextOverflow.Ellipsis,
                 )
                 ProgressLine(progress = book.progress)
+                // The reader's own note for this book, when it has one; the list card has room for it
+                // under the progress line that the grid card does not.
+                book.localNotes.takeIf { it.isNotBlank() }?.let { note ->
+                    Spacer(modifier = Modifier.height(2.dp))
+                    Text(
+                        text = note,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        fontSize = 12.sp,
+                        lineHeight = 15.sp,
+                        maxLines = if (useCompactTextLayout) 1 else 2,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                }
             }
         }
     }
@@ -943,7 +956,9 @@ private fun GridBookCard(
     val isFocused by interactionSource.collectIsFocusedAsState()
     val isHighlighted = (enableHover && isHovered) || isFocused
     var menuExpanded by remember { mutableStateOf(false) }
-    Column(
+    // The menu sits outside the spaced column: a popup anchor is a zero-height child, but `spacedBy`
+    // still counts it, which nudged the whole card down by one spacing step while the menu was open.
+    Box(
         modifier = Modifier
             .fillMaxWidth()
             .clip(RoundedCornerShape(12.dp))
@@ -962,9 +977,7 @@ private fun GridBookCard(
                 onClick = { onOpenBook(book) },
                 onLongClick = { menuExpanded = true },
                 onLongClickLabel = ToreadStrings.EditBookInfo,
-            )
-            .padding(6.dp),
-        verticalArrangement = Arrangement.spacedBy(7.dp),
+            ),
     ) {
         BookContextMenu(
             expanded = menuExpanded,
@@ -972,30 +985,37 @@ private fun GridBookCard(
             actions = menuActions,
             onDismiss = { menuExpanded = false },
         )
-        BookCover(
-            book = book,
-            showSyncBadge = true,
-            isPinned = isPinned,
+        Column(
             modifier = Modifier
                 .fillMaxWidth()
-                .aspectRatio(0.72f),
-        )
-        Text(
-            text = book.title,
-            color = MaterialTheme.colorScheme.onSurface,
-            fontSize = 17.sp,
-            fontWeight = FontWeight.SemiBold,
-            lineHeight = 22.sp,
-            maxLines = 2,
-            overflow = TextOverflow.Ellipsis,
-        )
-        Text(
-            text = book.gridMetaLine(),
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-            fontSize = 14.sp,
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis,
-        )
+                .padding(6.dp),
+            verticalArrangement = Arrangement.spacedBy(7.dp),
+        ) {
+            BookCover(
+                book = book,
+                showSyncBadge = true,
+                isPinned = isPinned,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .aspectRatio(0.72f),
+            )
+            Text(
+                text = book.title,
+                color = MaterialTheme.colorScheme.onSurface,
+                fontSize = 17.sp,
+                fontWeight = FontWeight.SemiBold,
+                lineHeight = 22.sp,
+                maxLines = 2,
+                overflow = TextOverflow.Ellipsis,
+            )
+            Text(
+                text = book.gridMetaLine(),
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                fontSize = 14.sp,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+        }
     }
 }
 

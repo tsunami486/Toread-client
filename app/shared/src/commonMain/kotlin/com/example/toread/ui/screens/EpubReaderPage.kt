@@ -40,6 +40,7 @@ import com.example.toread.reader.ReaderContentLoader
 import com.example.toread.sync.ProgressSyncScheduler
 import com.example.toread.sync.ReadingProgressRemoteSource
 import com.example.toread.settings.LocalSettingsRepository
+import com.example.toread.settings.ToreadAppearancePreferences
 import com.example.toread.ui.reader.AndroidReaderLayout
 import com.example.toread.ui.reader.DesktopReaderLayout
 import com.example.toread.ui.reader.EpubReflowSession
@@ -107,13 +108,15 @@ internal fun EpubReaderPage(
     } else {
         nightModeState.manualNightMode
     }
-    // The reading surface paints itself from this, so day/night also switches the paper under the text.
-    val highContrastDarkTheme = remember(book.bookHash) {
-        settingsRepository?.appearancePreferences()?.highContrastDarkTheme ?: false
+    // The reading surface paints itself from this, so day/night also switches the paper under the text,
+    // and the page's colors come from the palette the reader chose in 主题与色彩.
+    val readerAppearance = remember(book.bookHash) {
+        settingsRepository?.appearancePreferences() ?: ToreadAppearancePreferences()
     }
     val readerSurface = readerSurfaceColors(
         nightMode = nightMode,
-        highContrastDark = highContrastDarkTheme,
+        highContrastDark = readerAppearance.highContrastDarkTheme,
+        palette = readerAppearance.palette,
     )
     var desktopDoublePageEnabled by remember(book.bookHash) { mutableStateOf(true) }
     var desktopNightModeEnabled by remember(book.bookHash) { mutableStateOf(true) }
@@ -443,6 +446,7 @@ internal fun EpubReaderPage(
                             nightMode = nightMode,
                             onToggleNightMode = nightModeState::toggle,
                             readerSurface = readerSurface,
+                            appearance = readerAppearance,
                         )
                     }
                 }

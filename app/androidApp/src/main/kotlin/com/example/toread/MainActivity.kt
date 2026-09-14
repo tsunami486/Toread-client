@@ -1,9 +1,14 @@
 package com.example.toread
 
+import android.Manifest
+import android.content.Intent
+import android.content.pm.PackageManager
 import android.database.Cursor
 import android.net.Uri
+import android.os.Build
 import android.os.Bundle
 import android.provider.OpenableColumns
+import android.provider.Settings
 import android.view.KeyEvent
 import android.view.WindowInsets
 import android.view.WindowInsetsController
@@ -11,6 +16,7 @@ import androidx.activity.OnBackPressedCallback
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
+import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.tooling.preview.Preview
@@ -19,13 +25,16 @@ import com.example.toread.platform.AppBackgroundNotifier
 import com.example.toread.platform.AndroidBackHandlerBridge
 import com.example.toread.platform.AndroidFileAccessBridge
 import com.example.toread.platform.AndroidPlatformFilePickerBridge
+import com.example.toread.platform.AndroidPlatformImagePickerBridge
 import com.example.toread.platform.AndroidReaderDeviceControlsBridge
 import com.example.toread.platform.AndroidSystemBarsBridge
+import com.example.toread.platform.ImagePickResult
 import com.example.toread.platform.PlatformFile
 import kotlinx.coroutines.CompletableDeferred
 
 class MainActivity : ComponentActivity() {
     private var pendingPick: CompletableDeferred<List<PlatformFile>>? = null
+    private var pendingImagePick: CompletableDeferred<ImagePickResult>? = null
 
     private val openBookFiles = registerForActivityResult(
         ActivityResultContracts.OpenMultipleDocuments(),
@@ -33,6 +42,64 @@ class MainActivity : ComponentActivity() {
         pendingPick?.complete(uris.map { uri -> uri.toPlatformFile() })
         pendingPick = null
     }
+
+    private val pickGalleryImage = registerForActivityResult(
+        ActivityResultContracts.PickVisualMedia(),
+    ) { uri ->
+        pendingImagePick?.complete(uri.toImagePickResult())
+        pendingImagePick = null
+    }
+
+    private val getGalleryImage = registerForActivityResult(
+        ActivityResultContracts.GetContent(),
+    ) { uri ->
+        pendingImagePick?.complete(uri.toImagePickResult())
+        pendingImagePick = null
+    }
+
+    private val requestGalleryPermission = registerForActivityResult(
+        ActivityResultContracts.RequestPermission(),
+    ) { granted ->
+        val deferred = pendingImagePick
+        when {
+            !granted -> {
+                pendingImagePick = null
+                deferred?.complete(ImagePickResult.PermissionRequired)
+            }
+            // Access granted: ask the documents provider for an image, which is the only path left for a
+            // device without the system photo picker.
+            else -> getGalleryImage.launch("image/*")
+        }
+    }
+
+    private fun Uri?.toImagePickResult(): ImagePickResult =
+        this?.let { ImagePickResult.Picked(it.toPlatformFile()) } ?: ImagePickResult.Cancelled
+
+    /** The system photo picker needs no permission; older devices fall back to a runtime request. */
+    private fun launchImagePick() {
+        val hasPhotoPicker = runCatching {
+            ActivityResultContracts.PickVisualMedia.isPhotoPickerAvailable(this)
+        }.getOrDefault(false)
+        if (hasPhotoPicker) {
+            pickGalleryImage.launch(
+                PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly),
+            )
+        } else if (hasGalleryPermission()) {
+            getGalleryImage.launch("image/*")
+        } else {
+            requestGalleryPermission.launch(galleryPermission())
+        }
+    }
+
+    private fun galleryPermission(): String =
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            Manifest.permission.READ_MEDIA_IMAGES
+        } else {
+            Manifest.permission.READ_EXTERNAL_STORAGE
+        }
+
+    private fun hasGalleryPermission(): Boolean =
+        checkSelfPermission(galleryPermission()) == PackageManager.PERMISSION_GRANTED
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -47,6 +114,20 @@ class MainActivity : ComponentActivity() {
             pendingPick = deferred
             openBookFiles.launch(extensions.toMimeTypes())
             deferred.await()
+        }
+        AndroidPlatformImagePickerBridge.pickImage = {
+            val deferred = CompletableDeferred<ImagePickResult>()
+            pendingImagePick = deferred
+            launchImagePick()
+            deferred.await()
+        }
+        AndroidPlatformImagePickerBridge.openAppSettings = {
+            startActivity(
+                Intent(
+                    Settings.ACTION_APPLICATION_DETAILS_SETTINGS,
+                    Uri.fromParts("package", packageName, null),
+                ),
+            )
         }
         AndroidSystemBarsBridge.hideSystemBars = {
             window.insetsController?.let { controller ->
