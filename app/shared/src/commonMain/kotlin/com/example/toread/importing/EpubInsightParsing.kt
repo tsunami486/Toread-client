@@ -375,6 +375,76 @@ internal fun epubFrontMatterDescription(
 private const val MaximumFrontMatterSpineIndex = 8
 
 /**
+ * The first spine items are cover, copyright and 简介 pages, so body sampling starts after them: the
+ * sampler is looking for the story, not for more front matter.
+ */
+private const val BodySampleStartSpineIndex = 3
+
+/** How many readable chapters the classifier may sample; the text budget is [MaximumBodySampleChars]. */
+private const val MaximumBodySampleChapters = 3
+
+/** A sampled chapter shorter than this is front matter (cover, 目录, a single image), not story. */
+private const val MinimumBodySampleChapterChars = 400
+
+/**
+ * Samples the book's **body text** for category inference — the deliberately small exception to the
+ * "never read the story" rule.
+ *
+ * It is bounded three ways: it starts after the first [BodySampleStartSpineIndex] spine items, it
+ * reads at most [MaximumBodySampleChapters] chapters, and it stops at [MaximumBodySampleChars] of
+ * text. Documents already used as the description are never sampled, and a chapter that yields too
+ * little text is skipped rather than counted.
+ */
+internal fun sampleEpubBodyText(
+    archive: BookArchive,
+    packageDocument: EpubInsightPackage,
+    skipHrefs: Set<String> = emptySet(),
+): String? {
+    val builder = StringBuilder()
+    var chaptersRead = 0
+    packageDocument.spineHrefs().forEachIndexed { index, href ->
+        if (chaptersRead >= MaximumBodySampleChapters) return@forEachIndexed
+        if (builder.length >= MaximumBodySampleChars) return@forEachIndexed
+        if (index < BodySampleStartSpineIndex) return@forEachIndexed
+        if (href.toInsightPathKey() in skipHrefs) return@forEachIndexed
+        val item = packageDocument.manifestItemForPath(href) ?: return@forEachIndexed
+        if (item.mediaType?.contains("html", ignoreCase = true) != true) return@forEachIndexed
+        val entry = archive.findEntry(href) ?: return@forEachIndexed
+        val html = archive.readBytes(entry)?.decodeToString() ?: return@forEachIndexed
+        val text = extractChapterPlainText(html) ?: return@forEachIndexed
+        if (text.length < MinimumBodySampleChapterChars) return@forEachIndexed
+        builder.append(text.take(MaximumBodySampleChars - builder.length))
+        builder.append('\n')
+        chaptersRead++
+    }
+    return builder.toString().takeIf { it.isNotBlank() }
+}
+
+/** Tag-stripped chapter text: no noise filtering, because a keyword count wants the raw words. */
+internal fun extractChapterPlainText(html: String): String? {
+    val body = html
+        .replace(Regex("""(?is)<script\b.*?</script>"""), " ")
+        .replace(Regex("""(?is)<style\b.*?</style>"""), " ")
+        .replace(Regex("""(?is)<!--.*?-->"""), " ")
+        .let { withoutComments ->
+            Regex("""(?is)<body\b[^>]*>(.*?)</body>""")
+                .find(withoutComments)
+                ?.groupValues
+                ?.getOrNull(1)
+                ?: withoutComments
+        }
+        .replace(Regex("""(?is)</(p|div|h[1-6]|li|tr|section|article|blockquote)\s*>"""), "\n")
+        .replace(Regex("""(?is)<br\b[^>]*/?>"""), "\n")
+        .replace(Regex("""(?is)<[^>]+>"""), " ")
+        .let(::decodeXmlEntities)
+    return body
+        .replace(Regex("""[ \t\u3000]+"""), " ")
+        .replace(Regex("""\s*\n\s*"""), "\n")
+        .trim()
+        .takeIf { it.isNotBlank() }
+}
+
+/**
  * Turns one XHTML document into a description, or into `null` when it is not one.
  *
  * Production notes, 公众号 pages and 求订阅 blocks are dropped line by line instead of being handed

@@ -418,9 +418,13 @@ object ToreadStrings {
     const val CategoryLexiconIntro =
         "分类词典是本地规则库：每条规则是「关键词 ➔ 分类」。内置规则始终生效，添加的规则优先级更高。"
     const val CategoryLexiconBuiltInTitle = "内置规则"
-    const val CategoryLexiconAutoTitle = "自动分类"
+    const val CategoryLexiconAutoTitle = "自动分类（Beta）"
     const val CategoryLexiconAutoDescription =
-        "导入与首次打开书籍时，自动把分类写进「分类 / 标签」：先取书籍自己声明的分类（出版方元数据、文件名），没有时取唯一明显领先的建议；关闭后只在书籍信息页给出建议。"
+        "Beta：导入与首次打开书籍时自动把分类写进「分类 / 标签」——先取书籍自己声明的分类（出版方元数据、文件名），没有时取书名/系列/简介里唯一明显领先的建议，再没有时从正文取样（最多 3 章、约 96KB，关键词需重复出现）推断。可能出错，请当作建议而不是结论；关闭后只在书籍信息页给出建议。"
+    const val CategoryLexiconBodySampleNote =
+        "开启自动分类后，正文取样仅在本机进行、只用于推断分类，不会保存正文、也不会上传。"
+
+    fun bodyCategoryReason(keyword: String): String = "正文多次出现「$keyword」"
     const val CategoryLexiconCustomTitle = "我的规则"
     const val CategoryLexiconCustomEmpty = "还没有自定义规则，内置词典仍会生效。"
     const val CategoryLexiconAdd = "添加规则"

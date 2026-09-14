@@ -44,6 +44,13 @@ internal fun extractEpubInsight(archive: BookArchive, fileName: String?): BookIn
         packageDocument = packageDocument,
         navigationTitles = navigationTitles,
     )
+    // The story text, sampled only to infer a category (see sampleEpubBodyText for its bounds); a
+    // document already read as the description is not sampled again.
+    val bodySample = sampleEpubBodyText(
+        archive = archive,
+        packageDocument = packageDocument,
+        skipHrefs = setOfNotNull(frontMatter?.href?.toInsightPathKey()),
+    )
 
     val insight = BookInsight(
         description = opfInsight.description ?: frontMatter?.text,
@@ -62,6 +69,7 @@ internal fun extractEpubInsight(archive: BookArchive, fileName: String?): BookIn
             .take(MaximumInsightTags),
         series = opfInsight.series,
         authorHint = filenameAuthorHint(fileName),
+        bodySample = bodySample,
     )
     return insight.takeIf { !it.isEmpty }
 }
@@ -77,6 +85,8 @@ internal fun extractPlainTextInsight(fileName: String?, text: String): BookInsig
         descriptionOrigin = if (marked != null) "文本内「内容简介」" else null,
         subjects = filenameSubjects(fileName).take(MaximumInsightTags),
         authorHint = filenameAuthorHint(fileName),
+        // The head of the file the caller already read, which is the story as much as the 简介 block.
+        bodySample = text.takeIf { it.isNotBlank() },
     )
     return insight.takeIf { !it.isEmpty }
 }
@@ -86,6 +96,7 @@ internal fun pdfInsight(
     subject: String?,
     keywords: String?,
     fileName: String?,
+    bodySample: String? = null,
 ): BookInsight? {
     val description = subject?.trim()?.takeIf { it.length >= MinimumBlurbLength }
     val subjects = keywords
@@ -99,9 +110,16 @@ internal fun pdfInsight(
         descriptionOrigin = if (description != null) "PDF 文档信息" else null,
         subjects = (subjects + filenameSubjects(fileName)).distinct().take(MaximumInsightTags),
         authorHint = filenameAuthorHint(fileName),
+        bodySample = bodySample?.takeIf { it.isNotBlank() },
     )
     return insight.takeIf { !it.isEmpty }
 }
+
+/** One chapter of sampled text is capped by the sampler, so a PDF sample uses the same budget. */
+internal const val MaximumBodySampleChars = 96 * 1024
+
+/** How many leading pages a PDF body sample may read before it stops. */
+internal const val MaximumPdfSamplePages = 10
 
 internal const val MaximumInsightTags = 8
 internal const val MinimumBlurbLength = 24

@@ -298,6 +298,12 @@ private fun CategoryLexiconSettingsContent(
                 autoCategorize = enabled
             },
         )
+        Text(
+            text = ToreadStrings.CategoryLexiconBodySampleNote,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            fontSize = 12.sp,
+            modifier = Modifier.padding(bottom = 4.dp),
+        )
     }
 
     // The shipped dictionary, one row per category, read-only: the reader can see exactly what the

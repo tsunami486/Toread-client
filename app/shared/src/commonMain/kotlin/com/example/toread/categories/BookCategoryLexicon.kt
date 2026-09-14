@@ -418,20 +418,127 @@ internal fun confidentCategory(suggestions: List<BookCategorySuggestion>): Strin
 /** How many declared categories 自动分类 copies into 分类/标签. */
 private const val MaximumAutoCategoryTags = 3
 
+/** A keyword has to repeat this often in the sampled body text before it counts at all. */
+private const val MinimumBodyKeywordHits = 2
+
+/** Repetition that makes one body keyword convincing on its own. */
+private const val StrongBodyKeywordHits = 5
+
+private const val BodyBuiltInScore = 3
+private const val BodyBuiltInStrongScore = 4
+private const val BodyUserRuleScore = 4
+private const val BodyUserRuleStrongScore = 6
+
+/** One category in the sampled body text is never worth more than this. */
+private const val MaximumBodyCategoryScore = 6
+
+/**
+ * One category the sampled body text supports — which the description alone could not tell.
+ *
+ * [keyword] is the dictionary keyword that carried it and [hits] how often it appeared, so the UI
+ * can say 正文多次出现「厉鬼」 instead of presenting the category as fact.
+ */
+data class BodyCategoryEvidence(
+    val category: String,
+    val keyword: String,
+    val hits: Int,
+    val score: Int,
+)
+
+/**
+ * Scores a book's **body text** against the dictionary, for the cases where the metadata and the
+ * blurb are not enough (a self-made EPUB often carries neither).
+ *
+ * The rules keep a passing mention from becoming a category:
+ *
+ * - a keyword has to appear at least [MinimumBodyKeywordHits] times — one 武侠 in a sentence about
+ *   reading a novel is not a 武侠 book;
+ * - one keyword is worth [BodyBuiltInScore] (a reader's own rule: [BodyUserRuleScore]), and
+ *   [StrongBodyKeywordHits] hits make it [BodyBuiltInStrongScore] / [BodyUserRuleStrongScore];
+ * - a category never gains more than [MaximumBodyCategoryScore] from the body, so a long sampled
+ *   chapter cannot drown the title;
+ * - the reader's own rules outrank the shipped dictionary on a tie.
+ *
+ * The caller decides how much text to hand in; this function only counts.
+ */
+internal fun bodyTextCategoryEvidence(
+    text: String?,
+    userEntries: List<BookCategoryEntry> = emptyList(),
+    limit: Int = 4,
+): List<BodyCategoryEvidence> {
+    val sample = text?.takeIf { it.isNotBlank() } ?: return emptyList()
+    val hits = mutableListOf<BodyCategoryEvidence>()
+
+    fun countKeyword(entry: BookCategoryEntry, source: BookCategorySource) {
+        val keyword = entry.keyword.trim()
+        if (keyword.length < MinimumKeywordLength) return
+        var count = 0
+        var index = sample.indexOf(keyword, ignoreCase = true)
+        while (index >= 0 && count < StrongBodyKeywordHits) {
+            count++
+            index = sample.indexOf(keyword, startIndex = index + keyword.length, ignoreCase = true)
+        }
+        if (count < MinimumBodyKeywordHits) return
+        val strong = count >= StrongBodyKeywordHits
+        val score = when (source) {
+            BookCategorySource.UserDictionary -> if (strong) BodyUserRuleStrongScore else BodyUserRuleScore
+            else -> if (strong) BodyBuiltInStrongScore else BodyBuiltInScore
+        }
+        hits += BodyCategoryEvidence(
+            category = entry.category.trim(),
+            keyword = keyword,
+            hits = count,
+            score = score,
+        )
+    }
+
+    userEntries.forEach { entry -> countKeyword(entry, BookCategorySource.UserDictionary) }
+    builtInCategoryEntries.forEach { entry -> countKeyword(entry, BookCategorySource.BuiltInDictionary) }
+
+    return hits
+        .filter { it.category.isNotBlank() && it.category.length <= MaximumCategoryLength }
+        .groupBy { it.category }
+        .map { (category, evidence) ->
+            val best = evidence.maxBy { it.score }
+            BodyCategoryEvidence(
+                category = category,
+                keyword = best.keyword,
+                hits = best.hits,
+                score = evidence.sumOf { it.score }.coerceAtMost(MaximumBodyCategoryScore),
+            )
+        }
+        .sortedWith(compareByDescending<BodyCategoryEvidence> { it.score }.thenBy { it.category })
+        .take(limit.coerceAtLeast(0))
+}
+
+/**
+ * The one category the sampled body text may write without being asked: the same "clearly ahead"
+ * rule as [confidentCategory], applied to [bodyTextCategoryEvidence].
+ */
+internal fun confidentBodyCategory(evidence: List<BodyCategoryEvidence>): String? {
+    val top = evidence.firstOrNull() ?: return null
+    if (top.score < AutoCategoryMinimumScore) return null
+    if (evidence.size > 1 && evidence[1].score >= top.score) return null
+    return top.category
+}
+
 /**
  * The 分类/标签 value 自动分类 writes for one book, or an empty list when it should stay empty.
  *
- * Two sources, in order of trust:
+ * Three sources, in order of trust:
  *
  * 1. the categories the book's **own file** declares — `dc:subject`, calibre tags, a bracketed genre
  *    in the file name: the book saying what it is beats anything inferred here;
- * 2. otherwise one category the lexicon is clearly ahead on ([confidentCategory]).
+ * 2. one category the title, series and blurb are clearly ahead on ([confidentCategory]);
+ * 3. one category the **sampled body text** is clearly ahead on ([confidentBodyCategory]) — the last
+ *    resort, for a book whose metadata says nothing.
  */
 internal fun autoCategoryTags(
     input: BookCategoryInput,
     declaredSubjects: List<String>,
     userEntries: List<BookCategoryEntry> = emptyList(),
     memoryEntries: List<BookCategoryEntry> = emptyList(),
+    bodyEvidence: List<BodyCategoryEvidence> = emptyList(),
 ): List<String> {
     val declared = declaredSubjects
         .map(String::trim)
@@ -445,7 +552,8 @@ internal fun autoCategoryTags(
             userEntries = userEntries,
             memoryEntries = memoryEntries,
         ),
-    ) ?: return emptyList()
+    ) ?: confidentBodyCategory(bodyEvidence)
+    ?: return emptyList()
     return listOf(confident)
 }
 

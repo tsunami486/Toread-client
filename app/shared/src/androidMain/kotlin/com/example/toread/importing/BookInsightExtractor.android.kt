@@ -15,8 +15,9 @@ import kotlinx.coroutines.withContext
 /**
  * Android implementation: EPUB and TXT run through the shared parsers.
  *
- * PDF returns nothing on purpose: the platform `PdfRenderer` the Android reader uses exposes no
- * document information, so there is no local metadata to read without shipping a second PDF engine.
+ * PDF returns nothing on purpose: the platform `PdfRenderer` the Android reader uses exposes neither
+ * document information nor a text layer, so there is no local category evidence without shipping a
+ * second PDF engine. EPUB and TXT do sample their body text — see `sampleEpubBodyText`.
  */
 actual class BookInsightExtractor actual constructor() {
     actual suspend fun extract(

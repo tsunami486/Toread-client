@@ -1,7 +1,10 @@
 package com.example.toread.library
 
+import com.example.toread.categories.BookCategoryEntry
 import com.example.toread.categories.BookCategoryInput
+import com.example.toread.categories.BodyCategoryEvidence
 import com.example.toread.categories.autoCategoryTags
+import com.example.toread.categories.bodyTextCategoryEvidence
 import com.example.toread.categories.joinTagList
 import com.example.toread.database.ToreadDatabase
 import com.example.toread.importing.BookCoverExtractor
@@ -198,13 +201,15 @@ class BookshelfRepository(
     /**
      * 自动分类: writes 分类/标签 for a book that has none, using the shared rule in
      * [autoCategoryTags] — the categories the book itself declares first, then one category the
-     * lexicon is clearly ahead on. Returns the input unchanged when there is nothing worth writing.
+     * title/series/blurb (or, as a last resort, the sampled body text) is clearly ahead on. Returns
+     * the input unchanged when there is nothing worth writing.
      */
     private fun autoCategorizedMetadataJson(
         metadataJson: String,
         title: String,
         author: String?,
         insight: BookInsight?,
+        bodyEvidence: List<BodyCategoryEvidence>,
     ): String {
         val autoTags = autoCategoryTags(
             input = BookCategoryInput(
@@ -216,6 +221,7 @@ class BookshelfRepository(
             declaredSubjects = insight?.subjects.orEmpty(),
             userEntries = settingsRepository.categoryDictionary(),
             memoryEntries = settingsRepository.categoryMemory(),
+            bodyEvidence = bodyEvidence,
         )
         if (autoTags.isEmpty()) return metadataJson
         ToreadClientLog.info(
@@ -250,10 +256,17 @@ class BookshelfRepository(
     ): String {
         val previousDescription = parseStoredBookInsight(metadataJson).description
         val autoCategorize = settingsRepository.autoCategorizeEnabled()
+        val dictionary = settingsRepository.categoryDictionary()
+        // The body sample is scored here, once per pass: the reader's own rules count too, and the
+        // evidence is stored so the book info page can show 正文多次出现「…」 without re-reading the book.
+        val bodyEvidence = bodyTextCategoryEvidence(text = insight?.bodySample, userEntries = dictionary)
         val withInsight = encodeStoredBookInsight(
             metadataJson = metadataJson,
             insight = insight,
             autoCategorize = autoCategorize,
+            bodyEvidence = bodyEvidence.map { evidence ->
+                BookCategoryEntry(keyword = evidence.keyword, category = evidence.category)
+            },
         )
         val description = insight?.description?.trim().orEmpty()
         val annotations = parseBookLocalAnnotations(withInsight)
@@ -268,7 +281,13 @@ class BookshelfRepository(
             withInsight
         }
         val updatedMetadataJson = if (autoCategorize && annotations.tags.isBlank()) {
-            autoCategorizedMetadataJson(withNotes, title = title, author = author, insight = insight)
+            autoCategorizedMetadataJson(
+                metadataJson = withNotes,
+                title = title,
+                author = author,
+                insight = insight,
+                bodyEvidence = bodyEvidence,
+            )
         } else {
             withNotes
         }

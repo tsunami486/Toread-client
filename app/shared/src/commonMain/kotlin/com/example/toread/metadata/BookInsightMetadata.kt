@@ -1,5 +1,8 @@
 package com.example.toread.metadata
 
+import com.example.toread.categories.BookCategoryEntry
+import com.example.toread.categories.encodeCategoryEntries
+import com.example.toread.categories.parseCategoryEntries
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
@@ -54,6 +57,11 @@ data class BookInsight(
     val subjects: List<String> = emptyList(),
     val series: String? = null,
     val authorHint: String? = null,
+    /**
+     * A bounded sample of the book's **story text**, used only to infer a category — never stored in
+     * the book's metadata and never shown to the reader. Null when the format cannot offer one.
+     */
+    val bodySample: String? = null,
 ) {
     val isEmpty: Boolean
         get() = description.isNullOrBlank() &&
@@ -76,6 +84,8 @@ data class StoredBookInsight(
     val descriptionOrigin: String? = null,
     val subjects: List<String> = emptyList(),
     val series: String? = null,
+    /** Categories the sampled **body text** supported, kept as `关键词 -> 分类` pairs. */
+    val bodyEvidence: List<BookCategoryEntry> = emptyList(),
     /** True once an extraction pass ran at the current version, even when it found nothing. */
     val checked: Boolean = false,
     /** Whether the pass that wrote this also ran 自动分类, so flipping the switch re-visits the book. */
@@ -107,6 +117,7 @@ internal const val ImportedDescriptionKey = "imported_description"
 internal const val ImportedDescriptionSourceKey = "imported_description_source"
 internal const val ImportedDescriptionOriginKey = "imported_description_origin"
 internal const val ImportedTagsKey = "imported_tags"
+internal const val ImportedBodyTagsKey = "imported_body_tags"
 internal const val ImportedSeriesKey = "imported_series"
 
 private val insightJson = Json {
@@ -131,6 +142,7 @@ fun parseStoredBookInsight(metadataJson: String?): StoredBookInsight {
             .map(String::trim)
             .filter { it.isNotBlank() },
         series = root?.get(ImportedSeriesKey).asInsightString(),
+        bodyEvidence = parseCategoryEntries(root?.get(ImportedBodyTagsKey).asInsightString()),
         checked = root?.get(ImportedInsightVersionKey).asInsightString() == ImportedInsightVersion,
         autoCategorized = root?.get(ImportedAutoCategorizeKey).asInsightString() == "true",
     )
@@ -155,6 +167,7 @@ fun encodeStoredBookInsight(
     insight: BookInsight?,
     checked: Boolean = true,
     autoCategorize: Boolean = false,
+    bodyEvidence: List<BookCategoryEntry> = emptyList(),
 ): String {
     val existing = metadataJson.asInsightJsonObject()
     val insightKeys = setOf(
@@ -164,6 +177,7 @@ fun encodeStoredBookInsight(
         ImportedDescriptionSourceKey,
         ImportedDescriptionOriginKey,
         ImportedTagsKey,
+        ImportedBodyTagsKey,
         ImportedSeriesKey,
     )
     val merged = buildJsonObject {
@@ -188,6 +202,12 @@ fun encodeStoredBookInsight(
             ?.takeIf { it.isNotEmpty() }
             ?.let { put(ImportedTagsKey, it.joinToString(", ")) }
         insight?.series?.trim()?.takeIf { it.isNotEmpty() }?.let { put(ImportedSeriesKey, it) }
+        bodyEvidence
+            .map { entry -> BookCategoryEntry(entry.keyword.trim(), entry.category.trim()) }
+            .filter { entry -> entry.keyword.isNotEmpty() && entry.category.isNotEmpty() }
+            .distinct()
+            .takeIf { it.isNotEmpty() }
+            ?.let { put(ImportedBodyTagsKey, encodeCategoryEntries(it)) }
     }
     return insightJson.encodeToString(JsonObject.serializer(), merged)
 }

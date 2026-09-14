@@ -68,6 +68,7 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.toread.categories.BookCategoryInput
+import com.example.toread.categories.BookCategorySource
 import com.example.toread.categories.BookCategorySuggestion
 import com.example.toread.categories.MaximumCategoryLength
 import com.example.toread.categories.appendTag
@@ -135,6 +136,10 @@ internal fun BookInfoPage(
     var importedTags by remember(book?.bookHash) {
         mutableStateOf(book?.importedInsight?.subjects.orEmpty())
     }
+    // Categories the sampled body text supported, with the keyword that carried each one.
+    var importedBodyEvidence by remember(book?.bookHash) {
+        mutableStateOf(book?.importedInsight?.bodyEvidence.orEmpty())
+    }
     var categoryDictionary by remember(book?.bookHash) {
         mutableStateOf(settingsRepository?.categoryDictionary().orEmpty())
     }
@@ -180,13 +185,29 @@ internal fun BookInfoPage(
             memoryEntries = categoryMemory,
         )
     }
+    // What the sampled **body text** supported, as its own suggestions: the reason names the keyword
+    // that carried it, so a body-derived chip never looks like a fact.
+    val bodySuggestions = remember(importedBodyEvidence) {
+        importedBodyEvidence.map { evidence ->
+            BookCategorySuggestion(
+                category = evidence.category,
+                reason = ToreadStrings.bodyCategoryReason(evidence.keyword),
+                source = BookCategorySource.BuiltInDictionary,
+                score = 0,
+            )
+        }
+    }
+    val allSuggestions = remember(categorySuggestions, bodySuggestions) {
+        (categorySuggestions + bodySuggestions).distinctBy { it.category }
+    }
     // Everything the reader may pick from. The order never depends on what is selected — the chips
     // must stay where they are and only light up when tapped — so it is built from inputs that do not
     // move: the categories the book declares, the reader's rule categories, the shipped categories,
     // and finally this book's own tags (a brand-new custom tag is appended, never inserted).
-    val categoryCatalog = remember(importedTags, categoryDictionary, tags) {
+    val categoryCatalog = remember(importedTags, importedBodyEvidence, categoryDictionary, tags) {
         buildList {
             addAll(importedTags)
+            addAll(importedBodyEvidence.map { it.category })
             addAll(categoryDictionary.map { it.category })
             addAll(builtInCategoryKeywords.map { (category, _) -> category })
             addAll(parseTagList(tags))
@@ -213,6 +234,7 @@ internal fun BookInfoPage(
         val refreshed = repository.extractBookInsight(target.bookHash) ?: return@LaunchedEffect
         insightChecked = refreshed.insight.checked
         importedTags = refreshed.insight.subjects
+        importedBodyEvidence = refreshed.insight.bodyEvidence
         if (notes.isBlank() && refreshed.notes.isNotBlank()) {
             notes = refreshed.notes
             savedNotes = refreshed.notes
@@ -376,7 +398,7 @@ internal fun BookInfoPage(
                                 title = title,
                                 author = author,
                                 selectedTags = selectedTags,
-                                suggestions = categorySuggestions,
+                                suggestions = allSuggestions,
                                 catalog = categoryCatalog,
                                 tagsExpanded = tagsExpanded,
                                 showSuggestions = !autoCategorizeEnabled,
@@ -402,7 +424,7 @@ internal fun BookInfoPage(
                                 title = title,
                                 author = author,
                                 selectedTags = selectedTags,
-                                suggestions = categorySuggestions,
+                                suggestions = allSuggestions,
                                 catalog = categoryCatalog,
                                 tagsExpanded = tagsExpanded,
                                 showSuggestions = !autoCategorizeEnabled,

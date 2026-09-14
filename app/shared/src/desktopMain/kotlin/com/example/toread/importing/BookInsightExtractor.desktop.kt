@@ -12,6 +12,8 @@ import java.util.zip.ZipFile
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import org.apache.pdfbox.Loader
+import org.apache.pdfbox.pdmodel.PDDocument
+import org.apache.pdfbox.text.PDFTextStripper
 
 /**
  * Desktop implementation: the shared parsers do the thinking, this only opens the local file.
@@ -102,6 +104,25 @@ private fun readPdfInsight(path: String, fileName: String?): BookInsight? {
             subject = information?.subject,
             keywords = information?.keywords,
             fileName = fileName,
+            bodySample = samplePdfBodyText(document),
         )
     }
+}
+
+/**
+ * Samples the opening pages' text for category inference: at most [MaximumPdfSamplePages] pages and
+ * [MaximumBodySampleChars] characters, so a large PDF cannot turn an import into a text extraction
+ * job. A PDF whose text layer is missing simply yields nothing.
+ */
+private fun samplePdfBodyText(document: PDDocument): String? {
+    val lastPage = minOf(MaximumPdfSamplePages, document.numberOfPages)
+    if (lastPage <= 0) return null
+    return runCatching {
+        PDFTextStripper().apply {
+            startPage = 1
+            endPage = lastPage
+        }.getText(document)
+    }.getOrNull()
+        ?.take(MaximumBodySampleChars)
+        ?.takeIf { it.isNotBlank() }
 }
