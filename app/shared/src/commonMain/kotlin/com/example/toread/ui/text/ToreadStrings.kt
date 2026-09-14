@@ -241,6 +241,7 @@ object ToreadStrings {
     const val BookInfoTagsCustomLabel = "标签"
     const val BookInfoTagsCustomPlaceholder = "例如：借来的、在读"
     const val BookInfoTagsCustomEmpty = "请输入标签内容。"
+    const val BookInfoTagsSuggestionsLabel = "建议"
 
     fun bookInfoTagsCustomTooLong(maxLength: Int): String = "标签请控制在 $maxLength 字以内。"
     const val BookInfoNotesLabel = "自定义备注 / 简介"
@@ -417,6 +418,9 @@ object ToreadStrings {
     const val CategoryLexiconIntro =
         "分类词典是本地规则库：每条规则是「关键词 ➔ 分类」。内置规则始终生效，添加的规则优先级更高。"
     const val CategoryLexiconBuiltInTitle = "内置规则"
+    const val CategoryLexiconAutoTitle = "自动分类"
+    const val CategoryLexiconAutoDescription =
+        "导入与首次打开书籍时，自动把分类写进「分类 / 标签」：先取书籍自己声明的分类（出版方元数据、文件名），没有时取唯一明显领先的建议；关闭后只在书籍信息页给出建议。"
     const val CategoryLexiconCustomTitle = "我的规则"
     const val CategoryLexiconCustomEmpty = "还没有自定义规则，内置词典仍会生效。"
     const val CategoryLexiconAdd = "添加规则"

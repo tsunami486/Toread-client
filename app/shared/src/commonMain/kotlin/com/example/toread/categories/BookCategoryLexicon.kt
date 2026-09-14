@@ -46,6 +46,16 @@ data class BookCategoryInput(
 /** The score a category needs before it is worth showing as a chip. */
 private const val MinimumSuggestionScore = 1
 
+/**
+ * The score the leading suggestion needs before 自动分类 is allowed to write it on its own.
+ *
+ * 4 is "one real signal": a rule the reader wrote for this title, a series match, a remembered
+ * keyword, or a built-in title match that the description confirms. A lone blurb keyword (1) or a
+ * lone built-in title match (3) stays a suggestion, because a wrong automatic category is worse than
+ * an empty one.
+ */
+private const val AutoCategoryMinimumScore = 4
+
 /** One category never accumulates more than this, so a long blurb cannot drown the title. */
 private const val MaximumScorePerCategory = 12
 
@@ -390,6 +400,54 @@ private val BookCategorySource.preferenceRank: Int
         BookCategorySource.UserDictionary -> 1
         BookCategorySource.BuiltInDictionary -> 2
     }
+
+/**
+ * The one category 自动分类 may write without being asked, or null when nothing is clear enough.
+ *
+ * The leading suggestion has to be strong ([AutoCategoryMinimumScore]) **and** strictly ahead of the
+ * runner-up: a tie means the dictionary itself is unsure (《诡秘之主》 scores 奇幻 and 悬疑 equally),
+ * and guessing there would label the book wrongly, which is worse than leaving it empty.
+ */
+internal fun confidentCategory(suggestions: List<BookCategorySuggestion>): String? {
+    val top = suggestions.firstOrNull() ?: return null
+    if (top.score < AutoCategoryMinimumScore) return null
+    if (suggestions.size > 1 && suggestions[1].score >= top.score) return null
+    return top.category
+}
+
+/** How many declared categories 自动分类 copies into 分类/标签. */
+private const val MaximumAutoCategoryTags = 3
+
+/**
+ * The 分类/标签 value 自动分类 writes for one book, or an empty list when it should stay empty.
+ *
+ * Two sources, in order of trust:
+ *
+ * 1. the categories the book's **own file** declares — `dc:subject`, calibre tags, a bracketed genre
+ *    in the file name: the book saying what it is beats anything inferred here;
+ * 2. otherwise one category the lexicon is clearly ahead on ([confidentCategory]).
+ */
+internal fun autoCategoryTags(
+    input: BookCategoryInput,
+    declaredSubjects: List<String>,
+    userEntries: List<BookCategoryEntry> = emptyList(),
+    memoryEntries: List<BookCategoryEntry> = emptyList(),
+): List<String> {
+    val declared = declaredSubjects
+        .map(String::trim)
+        .filter { it.isNotBlank() && it.length <= MaximumCategoryLength }
+        .distinct()
+    if (declared.isNotEmpty()) return declared.take(MaximumAutoCategoryTags)
+
+    val confident = confidentCategory(
+        suggestBookCategories(
+            input = input,
+            userEntries = userEntries,
+            memoryEntries = memoryEntries,
+        ),
+    ) ?: return emptyList()
+    return listOf(confident)
+}
 
 /**
  * Remembers what the reader chose, so the next book by the same author or series can be suggested

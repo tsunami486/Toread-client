@@ -1,5 +1,8 @@
 package com.example.toread.importing
 
+import com.example.toread.categories.BookCategoryInput
+import com.example.toread.categories.autoCategoryTags
+import com.example.toread.categories.joinTagList
 import com.example.toread.database.DatabaseDriverFactory
 import com.example.toread.database.ToreadDatabase
 import com.example.toread.logging.ToreadClientLog
@@ -11,6 +14,7 @@ import com.example.toread.platform.BookFileStorage
 import com.example.toread.platform.FileHasher
 import com.example.toread.platform.PlatformFile
 import com.example.toread.platform.PlatformFilePicker
+import com.example.toread.settings.LocalSettingsRepository
 import com.example.toread.sync.BookMetadataJson
 import com.example.toread.sync.BookMetadataSyncPayload
 import com.example.toread.ui.text.ToreadStrings
@@ -31,7 +35,9 @@ class BookImportService(
     private val filePicker: PlatformFilePicker = PlatformFilePicker(),
     private val fileHasher: FileHasher = FileHasher(),
     private val bookFileStorage: BookFileStorage = BookFileStorage(),
-    private val metadataParser: BookMetadataParser = BasicBookMetadataParser(),
+    private val metadataParser: BookMetadataParser = BasicBookMetadataParser(
+        categorySettings = LocalSettingsRepository(database),
+    ),
     private val coverExtractor: BookCoverExtractor = BookCoverExtractor(),
     private val clock: ImportClock = PlatformImportClock(),
 ) {
@@ -211,6 +217,8 @@ interface BookMetadataParser {
 class BasicBookMetadataParser(
     private val epubMetadataExtractor: EpubMetadataExtractor = EpubMetadataExtractor(),
     private val bookInsightExtractor: BookInsightExtractor = BookInsightExtractor(),
+    /** Reads 自动分类 and the reader's own category rules; null keeps everything suggestion-only. */
+    private val categorySettings: LocalSettingsRepository? = null,
 ) : BookMetadataParser {
     override suspend fun parse(file: PlatformFile, extension: String, storedFilePath: String): BookMetadata {
         val fallbackTitle = file.displayName
@@ -223,11 +231,22 @@ class BasicBookMetadataParser(
             fileName = file.displayName,
         )
         val title = epubMetadata?.title?.takeIf { it.isNotBlank() } ?: fallbackTitle
+        val author = epubMetadata?.author?.takeIf { it.isNotBlank() }
+            ?: insight?.authorHint?.takeIf { it.isNotBlank() }
         return BookMetadata(
             title = title,
-            author = epubMetadata?.author?.takeIf { it.isNotBlank() }
-                ?: insight?.authorHint?.takeIf { it.isNotBlank() },
-            metadataJson = buildLocalImportMetadataJson(extension, epubMetadata, insight),
+            author = author,
+            metadataJson = applyAutoCategories(
+                metadataJson = buildLocalImportMetadataJson(
+                    extension = extension,
+                    epubMetadata = epubMetadata,
+                    insight = insight,
+                    autoCategorize = categorySettings?.autoCategorizeEnabled() == true,
+                ),
+                title = title,
+                author = author,
+                insight = insight,
+            ),
         ).also { metadata ->
             ToreadClientLog.info(
                 "import",
@@ -241,6 +260,44 @@ class BasicBookMetadataParser(
                 "title" to (epubMetadata?.title != null),
             )
         }
+    }
+
+    /**
+     * 自动分类 at import time, off by default: the categories the book's own file declares first,
+     * otherwise one category the lexicon is clearly ahead on. A fresh book has no category yet, so
+     * there is nothing to overwrite.
+     */
+    private fun applyAutoCategories(
+        metadataJson: String,
+        title: String,
+        author: String?,
+        insight: BookInsight?,
+    ): String {
+        val settings = categorySettings ?: return metadataJson
+        if (!settings.autoCategorizeEnabled()) return metadataJson
+        val autoTags = autoCategoryTags(
+            input = BookCategoryInput(
+                title = title,
+                author = author,
+                series = insight?.series,
+                description = insight?.description,
+            ),
+            declaredSubjects = insight?.subjects.orEmpty(),
+            userEntries = settings.categoryDictionary(),
+            memoryEntries = settings.categoryMemory(),
+        )
+        if (autoTags.isEmpty()) return metadataJson
+        ToreadClientLog.info(
+            "import",
+            "import.auto_categorized",
+            "format" to "local_import",
+            "tags" to autoTags.size,
+            "source" to if (insight?.subjects.isNullOrEmpty()) "lexicon" else "book",
+        )
+        return encodeBookLocalAnnotations(
+            metadataJson = metadataJson,
+            annotations = BookLocalAnnotations(tags = joinTagList(autoTags)),
+        )
     }
 }
 
@@ -264,17 +321,22 @@ internal fun buildLocalImportMetadataJson(extension: String, epubMetadata: EpubI
  * The metadata JSON a fresh import writes: the import metadata, the extracted candidate insight,
  * and — only for a brand-new book, which has nothing to lose — the description prefilled into 简介.
  *
- * Only the description is ever filled automatically: categories stay suggestions on the book info
- * page, because a wrong category is worse than an empty one. A later pass over an existing book must
- * not come through here either; it keeps whatever the reader already wrote.
+ * [autoCategorize] is recorded in the marker as well, so the pass that runs when 自动分类 is switched
+ * on later is not skipped for books imported while it was off. A later pass over an existing book
+ * must not come through here either; it keeps whatever the reader already wrote.
  */
 internal fun buildLocalImportMetadataJson(
     extension: String,
     epubMetadata: EpubImportMetadata?,
     insight: BookInsight?,
+    autoCategorize: Boolean = false,
 ): String {
     val base = buildLocalImportMetadataJson(extension, epubMetadata)
-    val withInsight = encodeStoredBookInsight(metadataJson = base, insight = insight)
+    val withInsight = encodeStoredBookInsight(
+        metadataJson = base,
+        insight = insight,
+        autoCategorize = autoCategorize,
+    )
     val prefill = insight.toPrefilledAnnotations() ?: return withInsight
     return encodeBookLocalAnnotations(metadataJson = withInsight, annotations = prefill)
 }

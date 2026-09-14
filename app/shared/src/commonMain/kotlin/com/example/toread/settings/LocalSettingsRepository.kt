@@ -196,6 +196,17 @@ class LocalSettingsRepository(
         saveSetting(CategoryMemoryKey, encodeCategoryEntries(entries))
     }
 
+    /**
+     * Whether 自动分类 may write 分类/标签 on its own: the categories the book itself declares, plus
+     * one category when the lexicon is clearly ahead. Device-level and never synced.
+     */
+    fun autoCategorizeEnabled(): Boolean =
+        readBooleanSetting(key = AutoCategorizeKey, defaultValue = false)
+
+    fun setAutoCategorizeEnabled(enabled: Boolean) {
+        saveSetting(AutoCategorizeKey, enabled.toString())
+    }
+
     fun setDynamicColorEnabled(enabled: Boolean) {
         saveSetting(DynamicColorKey, enabled.toString())
     }
@@ -351,6 +362,7 @@ class LocalSettingsRepository(
         const val PinnedBooksKey = "bookshelf.pinned_hashes"
         const val CategoryDictionaryKey = "library.category_dictionary"
         const val CategoryMemoryKey = "library.category_memory"
+        const val AutoCategorizeKey = "library.auto_categorize_enabled"
         const val PdfAndroidLandscapeDoublePageKey =
             "reader.pdf.android.landscape_double_page_enabled"
         const val PdfAndroidVolumeKeysKey = "reader.pdf.android.volume_keys_enabled"

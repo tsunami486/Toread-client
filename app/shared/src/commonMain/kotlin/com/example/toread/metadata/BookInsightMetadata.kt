@@ -78,6 +78,8 @@ data class StoredBookInsight(
     val series: String? = null,
     /** True once an extraction pass ran at the current version, even when it found nothing. */
     val checked: Boolean = false,
+    /** Whether the pass that wrote this also ran 自动分类, so flipping the switch re-visits the book. */
+    val autoCategorized: Boolean = false,
 ) {
     val isEmpty: Boolean
         get() = description.isNullOrBlank() && subjects.isEmpty() && series.isNullOrBlank()
@@ -100,6 +102,7 @@ data class StoredBookInsight(
 internal const val ImportedInsightVersion = "2"
 
 internal const val ImportedInsightVersionKey = "imported_insight_version"
+internal const val ImportedAutoCategorizeKey = "imported_auto_categorize"
 internal const val ImportedDescriptionKey = "imported_description"
 internal const val ImportedDescriptionSourceKey = "imported_description_source"
 internal const val ImportedDescriptionOriginKey = "imported_description_origin"
@@ -129,12 +132,19 @@ fun parseStoredBookInsight(metadataJson: String?): StoredBookInsight {
             .filter { it.isNotBlank() },
         series = root?.get(ImportedSeriesKey).asInsightString(),
         checked = root?.get(ImportedInsightVersionKey).asInsightString() == ImportedInsightVersion,
+        autoCategorized = root?.get(ImportedAutoCategorizeKey).asInsightString() == "true",
     )
 }
 
-/** True when an extraction pass at the current version already ran for this book. */
-fun hasCurrentBookInsight(metadataJson: String?): Boolean =
-    parseStoredBookInsight(metadataJson).checked
+/**
+ * True when a pass at the current version already ran for this book **with the same 自动分类
+ * setting**: flipping the switch changes the answer, so every book is visited once more and can pick
+ * the new behaviour up (or shed what the old one wrote).
+ */
+fun hasCurrentBookInsight(metadataJson: String?, autoCategorize: Boolean = false): Boolean {
+    val stored = parseStoredBookInsight(metadataJson)
+    return stored.checked && stored.autoCategorized == autoCategorize
+}
 
 /**
  * Rewrites the metadata JSON with [insight], leaving every other key — the user's annotations and
@@ -144,10 +154,12 @@ fun encodeStoredBookInsight(
     metadataJson: String?,
     insight: BookInsight?,
     checked: Boolean = true,
+    autoCategorize: Boolean = false,
 ): String {
     val existing = metadataJson.asInsightJsonObject()
     val insightKeys = setOf(
         ImportedInsightVersionKey,
+        ImportedAutoCategorizeKey,
         ImportedDescriptionKey,
         ImportedDescriptionSourceKey,
         ImportedDescriptionOriginKey,
@@ -158,7 +170,10 @@ fun encodeStoredBookInsight(
         existing?.forEach { (key, value) ->
             if (key !in insightKeys) put(key, value)
         }
-        if (checked) put(ImportedInsightVersionKey, ImportedInsightVersion)
+        if (checked) {
+            put(ImportedInsightVersionKey, ImportedInsightVersion)
+            put(ImportedAutoCategorizeKey, autoCategorize.toString())
+        }
         insight?.description?.trim()?.takeIf { it.isNotEmpty() }?.let {
             put(ImportedDescriptionKey, it)
         }

@@ -1,5 +1,8 @@
 package com.example.toread.library
 
+import com.example.toread.categories.BookCategoryInput
+import com.example.toread.categories.autoCategoryTags
+import com.example.toread.categories.joinTagList
 import com.example.toread.database.ToreadDatabase
 import com.example.toread.importing.BookCoverExtractor
 import com.example.toread.importing.BookInsightExtractor
@@ -21,6 +24,7 @@ import com.example.toread.reader.BookLocator
 import com.example.toread.reader.BookLocatorJson
 import com.example.toread.sync.BookMetadataJson
 import com.example.toread.sync.BookMetadataSyncPayload
+import com.example.toread.settings.LocalSettingsRepository
 
 class BookshelfRepository(
     private val database: ToreadDatabase,
@@ -29,6 +33,7 @@ class BookshelfRepository(
     private val bookFileStorage: BookFileStorage = BookFileStorage(),
     private val bookInsightExtractor: BookInsightExtractor = BookInsightExtractor(),
     private val clock: ProgressClock = PlatformProgressClock(),
+    private val settingsRepository: LocalSettingsRepository = LocalSettingsRepository(database),
 ) {
     fun listBooks(): List<BookshelfBook> =
         database.toreadDatabaseQueries.selectAllBooks().executeAsList().map { row ->
@@ -112,8 +117,8 @@ class BookshelfRepository(
      * when it opens a book that has not been visited yet.
      *
      * Besides the `imported_*` keys it fills 简介 with the description it found, and only when the
-     * reader has not written anything there; 分类/标签 is never filled automatically, because
-     * categories are offered as suggestions instead.
+     * reader has not written anything there. 分类/标签 is only touched when 自动分类 is on and the
+     * book still has no category of its own.
      */
     suspend fun extractBookInsight(bookHash: String): BookInsightRefresh? {
         val book = database.toreadDatabaseQueries
@@ -158,10 +163,11 @@ class BookshelfRepository(
     suspend fun backfillMissingBookInsights(limit: Int = DefaultInsightBackfillLimit): Int {
         if (limit <= 0) return 0
         val books = database.toreadDatabaseQueries.selectAllBooks().executeAsList()
+        val autoCategorize = settingsRepository.autoCategorizeEnabled()
         var updated = 0
         for (book in books) {
             if (updated >= limit) break
-            if (hasCurrentBookInsight(book.metadata_json)) continue
+            if (hasCurrentBookInsight(book.metadata_json, autoCategorize)) continue
             val insight = bookInsightExtractor.extract(
                 bookFilePath = book.file_path,
                 format = book.format,
@@ -190,14 +196,49 @@ class BookshelfRepository(
     }
 
     /**
+     * 自动分类: writes 分类/标签 for a book that has none, using the shared rule in
+     * [autoCategoryTags] — the categories the book itself declares first, then one category the
+     * lexicon is clearly ahead on. Returns the input unchanged when there is nothing worth writing.
+     */
+    private fun autoCategorizedMetadataJson(
+        metadataJson: String,
+        title: String,
+        author: String?,
+        insight: BookInsight?,
+    ): String {
+        val autoTags = autoCategoryTags(
+            input = BookCategoryInput(
+                title = title,
+                author = author,
+                series = insight?.series,
+                description = insight?.description,
+            ),
+            declaredSubjects = insight?.subjects.orEmpty(),
+            userEntries = settingsRepository.categoryDictionary(),
+            memoryEntries = settingsRepository.categoryMemory(),
+        )
+        if (autoTags.isEmpty()) return metadataJson
+        ToreadClientLog.info(
+            "import",
+            "import.auto_categorized",
+            "tags" to autoTags.size,
+            "source" to if (insight?.subjects.isNullOrEmpty()) "lexicon" else "book",
+        )
+        return encodeBookLocalAnnotations(
+            metadataJson = metadataJson,
+            annotations = parseBookLocalAnnotations(metadataJson).copy(tags = joinTagList(autoTags)),
+        )
+    }
+
+    /**
      * Writes [insight] into the book's metadata JSON and queues the metadata upsert, exactly like an
      * edit does, so the extracted description reaches the other devices through the normal sync path.
      *
      * The description is also filled into 简介, but only while that field still belongs to the
      * extractor: it is written when it is empty, and refreshed when it still holds exactly the
      * description a previous pass wrote — so a better extractor can correct its own text — while a
-     * note the reader typed is never touched. 分类/标签 is never written: categories stay suggestions,
-     * because a wrong automatic category is worse than an empty one.
+     * note the reader typed is never touched. 分类/标签 stays the reader's: it is only written by
+     * 自动分类, and only while the book has no category at all.
      */
     private fun storeBookInsight(
         bookHash: String,
@@ -208,18 +249,28 @@ class BookshelfRepository(
         insight: BookInsight?,
     ): String {
         val previousDescription = parseStoredBookInsight(metadataJson).description
-        val withInsight = encodeStoredBookInsight(metadataJson = metadataJson, insight = insight)
+        val autoCategorize = settingsRepository.autoCategorizeEnabled()
+        val withInsight = encodeStoredBookInsight(
+            metadataJson = metadataJson,
+            insight = insight,
+            autoCategorize = autoCategorize,
+        )
         val description = insight?.description?.trim().orEmpty()
         val annotations = parseBookLocalAnnotations(withInsight)
         val notesAreOurs = annotations.notes.isBlank() ||
             (previousDescription != null && annotations.notes == previousDescription)
-        val updatedMetadataJson = if (description.isNotEmpty() && notesAreOurs) {
+        val withNotes = if (description.isNotEmpty() && notesAreOurs) {
             encodeBookLocalAnnotations(
                 metadataJson = withInsight,
                 annotations = annotations.copy(notes = description),
             )
         } else {
             withInsight
+        }
+        val updatedMetadataJson = if (autoCategorize && annotations.tags.isBlank()) {
+            autoCategorizedMetadataJson(withNotes, title = title, author = author, insight = insight)
+        } else {
+            withNotes
         }
         val now = clock.nowIsoString()
         database.toreadDatabaseQueries.transaction {

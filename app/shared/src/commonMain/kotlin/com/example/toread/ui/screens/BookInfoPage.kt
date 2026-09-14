@@ -180,19 +180,24 @@ internal fun BookInfoPage(
             memoryEntries = categoryMemory,
         )
     }
-    // Everything the reader may pick from: their own choice first, then what the book declares, then
-    // the rules' suggestions, then the reader's own rules and the shipped dictionary.
-    val categoryCatalog = remember(selectedTags, importedTags, categorySuggestions, categoryDictionary) {
+    // Everything the reader may pick from. The order never depends on what is selected — the chips
+    // must stay where they are and only light up when tapped — so it is built from inputs that do not
+    // move: the categories the book declares, the reader's rule categories, the shipped categories,
+    // and finally this book's own tags (a brand-new custom tag is appended, never inserted).
+    val categoryCatalog = remember(importedTags, categoryDictionary, tags) {
         buildList {
-            addAll(selectedTags)
             addAll(importedTags)
-            addAll(categorySuggestions.map { it.category })
             addAll(categoryDictionary.map { it.category })
             addAll(builtInCategoryKeywords.map { (category, _) -> category })
+            addAll(parseTagList(tags))
         }
             .map(String::trim)
             .filter { it.isNotBlank() }
             .distinct()
+    }
+    // Read once per book: the settings page is the only place that changes it.
+    val autoCategorizeEnabled = remember(book?.bookHash) {
+        settingsRepository?.autoCategorizeEnabled() == true
     }
 
     /**
@@ -374,6 +379,7 @@ internal fun BookInfoPage(
                                 suggestions = categorySuggestions,
                                 catalog = categoryCatalog,
                                 tagsExpanded = tagsExpanded,
+                                showSuggestions = !autoCategorizeEnabled,
                                 notes = notes,
                                 onTitleChange = { title = it },
                                 onAuthorChange = { author = it },
@@ -399,6 +405,7 @@ internal fun BookInfoPage(
                                 suggestions = categorySuggestions,
                                 catalog = categoryCatalog,
                                 tagsExpanded = tagsExpanded,
+                                showSuggestions = !autoCategorizeEnabled,
                                 notes = notes,
                                 noteHeight = BookInfoCompactNoteMinHeight,
                                 onTitleChange = { title = it },
@@ -882,6 +889,7 @@ private fun WideEditorRow(
     suggestions: List<BookCategorySuggestion>,
     catalog: List<String>,
     tagsExpanded: Boolean,
+    showSuggestions: Boolean,
     notes: String,
     onTitleChange: (String) -> Unit,
     onAuthorChange: (String) -> Unit,
@@ -946,6 +954,7 @@ private fun WideEditorRow(
                     suggestions = suggestions,
                     catalog = catalog,
                     tagsExpanded = tagsExpanded,
+                    showSuggestions = showSuggestions,
                     notes = notes,
                     noteHeight = BookInfoNoteMinHeight,
                     onTitleChange = onTitleChange,
@@ -992,6 +1001,7 @@ private fun BookInfoFields(
     suggestions: List<BookCategorySuggestion>,
     catalog: List<String>,
     tagsExpanded: Boolean,
+    showSuggestions: Boolean,
     notes: String,
     noteHeight: Dp,
     onTitleChange: (String) -> Unit,
@@ -1023,6 +1033,7 @@ private fun BookInfoFields(
             suggestions = suggestions,
             catalog = catalog,
             expanded = tagsExpanded,
+            showSuggestions = showSuggestions,
             onToggleExpanded = onToggleTagsExpanded,
             onToggleTag = onToggleTag,
             onAddCustomTag = onAddCustomTag,
@@ -1046,6 +1057,7 @@ private fun TagChipsField(
     suggestions: List<BookCategorySuggestion>,
     catalog: List<String>,
     expanded: Boolean,
+    showSuggestions: Boolean,
     onToggleExpanded: () -> Unit,
     onToggleTag: (String) -> Unit,
     onAddCustomTag: () -> Unit,
@@ -1107,6 +1119,28 @@ private fun TagChipsField(
                     tint = MaterialTheme.colorScheme.onSurfaceVariant,
                     modifier = Modifier.size(22.dp),
                 )
+            }
+        }
+        if (expanded && showSuggestions && suggestions.isNotEmpty()) {
+            // 自动分类 off: the lexicon's proposals get their own row above the catalog, so the
+            // catalog below keeps the same fixed order every time it is opened.
+            Text(
+                text = ToreadStrings.BookInfoTagsSuggestionsLabel,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                fontSize = 11.sp,
+            )
+            FlowRow(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                suggestions.forEach { suggestion ->
+                    TagChip(
+                        label = suggestion.category,
+                        selected = isSelected(suggestion.category),
+                        onClick = { onToggleTag(suggestion.category) },
+                    )
+                }
             }
         }
         if (expanded) {

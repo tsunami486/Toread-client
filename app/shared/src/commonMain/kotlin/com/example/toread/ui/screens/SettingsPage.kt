@@ -277,12 +277,26 @@ private fun CategoryLexiconSettingsContent(
     var keyword by remember { mutableStateOf("") }
     var category by remember { mutableStateOf("") }
     var error by remember { mutableStateOf<String?>(null) }
+    var autoCategorize by remember(settingsRepository) {
+        mutableStateOf(settingsRepository?.autoCategorizeEnabled() == true)
+    }
 
     SettingsGroup(title = ToreadStrings.SettingsCategoryLexicon) {
         Text(
             text = ToreadStrings.CategoryLexiconIntro,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
             fontSize = 13.sp,
+        )
+        SettingsSwitchRow(
+            symbol = ToreadSymbols.Tune,
+            title = ToreadStrings.CategoryLexiconAutoTitle,
+            description = ToreadStrings.CategoryLexiconAutoDescription,
+            checked = autoCategorize,
+            enabled = settingsEnabled,
+            onCheckedChange = { enabled ->
+                settingsRepository?.setAutoCategorizeEnabled(enabled)
+                autoCategorize = enabled
+            },
         )
     }
 
