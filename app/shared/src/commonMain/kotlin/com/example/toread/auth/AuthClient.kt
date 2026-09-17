@@ -124,7 +124,10 @@ class AuthClient(
             )
         }.getOrElse { throwable ->
             if (throwable is CancellationException) throw throwable
-            AuthClientResult.Failure(message = AuthServiceUnavailableMessage)
+            // A dropped connection, a DNS stall, or a timeout is a network problem, not the service
+            // being unavailable: on a weak network those are the common case, and calling them
+            // "登录服务暂不可用" hid which side of the wire actually failed.
+            AuthClientResult.Failure(message = NetworkServiceUnavailableMessage)
         }
     }
 }
@@ -259,7 +262,12 @@ private val AuthHttpJson = Json {
     explicitNulls = false
 }
 
-private const val AuthHttpTimeoutMillis = 3_000L
+/**
+ * Login and registration share the refresh call's budget. They used to run on a 3-second connect/read
+ * timeout, which a weak mobile network blows routinely — and every such failure surfaced as "登录服务暂
+ * 不可用", blaming the server for a lost packet.
+ */
+private const val AuthHttpTimeoutMillis = 15_000L
 private const val AuthRefreshHttpTimeoutMillis = 15_000L
 private const val HealthCheckHttpTimeoutMillis = 8_000L
 private const val InvalidRefreshTokenError = "invalid_refresh_token"
