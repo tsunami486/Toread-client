@@ -44,6 +44,7 @@ import androidx.compose.ui.draw.drawWithContent
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.drawscope.clipPath
+import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
@@ -60,6 +61,7 @@ import com.example.toread.settings.ToreadPalette
 import com.example.toread.settings.ToreadThemeMode
 import com.example.toread.ui.icons.ToreadSymbolIcon
 import com.example.toread.ui.icons.ToreadSymbols
+import com.example.toread.ui.text.ToreadLegalTexts
 import com.example.toread.ui.text.ToreadStrings
 import com.example.toread.ui.theme.paletteSwatchColors
 import com.example.toread.ui.theme.toreadColorScheme
@@ -74,10 +76,15 @@ private enum class SettingsSubPage {
     Interface,
     Appearance,
     CategoryLexicon,
+    PrivacyPolicy,
+    UserAgreement,
 }
 
 private val SettingsContentMaxWidth = 720.dp
 private val SettingsRowMinHeight = 56.dp
+
+/** 工信部政务服务平台，供公众查询核对 App 备案信息。 */
+private const val AppFilingQueryUrl = "https://beian.miit.gov.cn"
 
 @Composable
 internal fun SettingsPage(
@@ -94,6 +101,7 @@ internal fun SettingsPage(
 ) {
     var subPage by remember { mutableStateOf<SettingsSubPage?>(null) }
     var showAboutDialog by remember { mutableStateOf(false) }
+    val uriHandler = LocalUriHandler.current
 
     PlatformBackHandler(enabled = true) {
         if (subPage != null) subPage = null else onBack()
@@ -131,6 +139,8 @@ internal fun SettingsPage(
                     SettingsSubPage.Interface -> ToreadStrings.SettingsInterface
                     SettingsSubPage.Appearance -> ToreadStrings.SettingsAppearance
                     SettingsSubPage.CategoryLexicon -> ToreadStrings.SettingsCategoryLexicon
+                    SettingsSubPage.PrivacyPolicy -> ToreadStrings.PrivacyPolicy
+                    SettingsSubPage.UserAgreement -> ToreadStrings.UserAgreement
                     null -> ToreadStrings.Settings
                 },
                 onBack = { if (subPage != null) subPage = null else onBack() },
@@ -150,6 +160,14 @@ internal fun SettingsPage(
                 SettingsSubPage.CategoryLexicon -> CategoryLexiconSettingsContent(
                     settingsRepository = settingsRepository,
                 )
+                SettingsSubPage.PrivacyPolicy -> LegalTextSettingsContent(
+                    updated = ToreadLegalTexts.PrivacyPolicyUpdated,
+                    body = ToreadLegalTexts.PrivacyPolicy,
+                )
+                SettingsSubPage.UserAgreement -> LegalTextSettingsContent(
+                    updated = ToreadLegalTexts.UserAgreementUpdated,
+                    body = ToreadLegalTexts.UserAgreement,
+                )
                 null -> SettingsOverviewContent(
                     accountTitle = accountTitle,
                     accountSubtitle = accountSubtitle,
@@ -162,6 +180,9 @@ internal fun SettingsPage(
                     onOpenCategoryLexicon = { subPage = SettingsSubPage.CategoryLexicon },
                     onClearCache = onClearCache,
                     onAbout = { showAboutDialog = true },
+                    onOpenAppFiling = { uriHandler.openUri(AppFilingQueryUrl) },
+                    onOpenPrivacyPolicy = { subPage = SettingsSubPage.PrivacyPolicy },
+                    onOpenUserAgreement = { subPage = SettingsSubPage.UserAgreement },
                     onLogout = onLogout,
                 )
             }
@@ -179,8 +200,15 @@ internal fun SettingsPage(
             title = { Text(ToreadStrings.AboutToread) },
             text = {
                 Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Text(ToreadStrings.Version100)
+                    Text(ToreadStrings.VersionLabel)
                     Text(ToreadStrings.AboutDescription)
+                    // App 备案要求：显著位置标明备案编号，并在其下方链接备案系统供公众核对。
+                    Text(ToreadStrings.AppFiling + "：" + ToreadStrings.AppFilingNumber)
+                    Text(
+                        text = ToreadStrings.AppFilingQueryDescription,
+                        color = MaterialTheme.colorScheme.primary,
+                        modifier = Modifier.clickable { uriHandler.openUri(AppFilingQueryUrl) },
+                    )
                 }
             },
         )
@@ -200,6 +228,9 @@ private fun SettingsOverviewContent(
     onOpenCategoryLexicon: () -> Unit,
     onClearCache: () -> Unit,
     onAbout: () -> Unit,
+    onOpenAppFiling: () -> Unit,
+    onOpenPrivacyPolicy: () -> Unit,
+    onOpenUserAgreement: () -> Unit,
     onLogout: () -> Unit,
 ) {
     SettingsAccountRow(title = accountTitle, subtitle = accountSubtitle)
@@ -242,8 +273,24 @@ private fun SettingsOverviewContent(
         SettingsNavigationRow(
             symbol = ToreadSymbols.Info,
             title = ToreadStrings.About,
-            trailingText = ToreadStrings.Version100,
+            trailingText = ToreadStrings.VersionLabel,
             onClick = onAbout,
+        )
+        SettingsNavigationRow(
+            symbol = ToreadSymbols.Article,
+            title = ToreadStrings.AppFiling,
+            description = ToreadStrings.AppFilingNumber,
+            onClick = onOpenAppFiling,
+        )
+        SettingsNavigationRow(
+            symbol = ToreadSymbols.Article,
+            title = ToreadStrings.PrivacyPolicy,
+            onClick = onOpenPrivacyPolicy,
+        )
+        SettingsNavigationRow(
+            symbol = ToreadSymbols.Article,
+            title = ToreadStrings.UserAgreement,
+            onClick = onOpenUserAgreement,
         )
         SettingsNavigationRow(
             symbol = ToreadSymbols.Logout,
@@ -253,6 +300,31 @@ private fun SettingsOverviewContent(
             onClick = onLogout,
         )
     }
+}
+
+/**
+ * 隐私政策与用户协议共用的正文页。
+ *
+ * 正文较长，直接跟随设置页自身的滚动容器，不再嵌套一层滚动，避免出现双滚动条。
+ */
+@Composable
+private fun LegalTextSettingsContent(
+    updated: String,
+    body: String,
+) {
+    Text(
+        text = updated,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+        fontSize = 13.sp,
+        modifier = Modifier.padding(top = 4.dp, bottom = 14.dp),
+    )
+    Text(
+        text = body,
+        color = MaterialTheme.colorScheme.onSurface,
+        fontSize = 14.sp,
+        lineHeight = 22.sp,
+    )
+    Spacer(modifier = Modifier.height(24.dp))
 }
 
 /**

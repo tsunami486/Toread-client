@@ -23,7 +23,7 @@ compose.desktop {
             targetFormats(TargetFormat.Dmg, TargetFormat.Msi, TargetFormat.Deb)
             modules("java.instrument", "java.management", "java.sql", "jdk.unsupported")
             packageName = "同阅"
-            packageVersion = "1.0.0"
+            packageVersion = libs.versions.toread.app.get()
             windows {
                 iconFile.set(project.file("src/main/resources/tongyue-icon.ico"))
             }

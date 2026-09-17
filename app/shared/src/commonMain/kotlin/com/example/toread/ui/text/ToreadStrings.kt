@@ -1,5 +1,6 @@
 package com.example.toread.ui.text
 
+import com.example.toread.config.GeneratedToreadBuildConfig
 import kotlin.math.roundToInt
 
 /**
@@ -374,7 +375,9 @@ object ToreadStrings {
     const val LocalReadingOnly = "当前仅使用本地阅读数据"
     const val LoginToSync = "登录后可进行跨设备同步"
     const val AboutToread = "关于" + AppName
-    const val Version100 = "版本 1.0"
+    // Build-injected so the label always matches the shipped package version
+    // (版本目录 gradle/libs.versions.toml 的 toread-app).
+    val VersionLabel: String get() = "版本 " + GeneratedToreadBuildConfig.appVersion
     const val AboutDescription = "导入型个人阅读器。本地阅读 EPUB、PDF 和 TXT，同步阅读进度、书签与笔记。"
     const val LogoutState = "退出登录状态"
     const val LogoutLocalOnlyHint = "退出后仅清除本地 token，本地书籍与同步数据将保留。"
@@ -386,6 +389,11 @@ object ToreadStrings {
     const val AppPrivateDirectory = "应用私有目录"
     const val ClearCache = "清理缓存"
     const val About = "关于"
+    const val AppFiling = "备案编号"
+    const val AppFilingNumber = "湘ICP备2026040912号-1A"
+    const val AppFilingQueryDescription = "工业和信息化部政务服务平台"
+    const val PrivacyPolicy = "隐私政策"
+    const val UserAgreement = "用户协议"
 
     // Settings sections and sub pages
     const val SettingsGroupAppAndInterface = "应用与界面"

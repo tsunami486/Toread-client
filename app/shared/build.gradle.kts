@@ -13,6 +13,9 @@ abstract class GenerateToreadBuildConfig : DefaultTask() {
     @get:Input
     abstract val serverBaseUrl: Property<String>
 
+    @get:Input
+    abstract val appVersion: Property<String>
+
     @get:OutputDirectory
     abstract val outputDirectory: DirectoryProperty
 
@@ -26,6 +29,10 @@ abstract class GenerateToreadBuildConfig : DefaultTask() {
             .replace("\r", "\\r")
             .replace("\n", "\\n")
             .replace("\t", "\\t")
+        val escapedAppVersion = appVersion.get()
+            .trim()
+            .replace("\\", "\\\\")
+            .replace("\"", "\\\"")
         val packageDirectory = outputDirectory.get().asFile
             .resolve("com/example/toread/config")
         packageDirectory.mkdirs()
@@ -36,6 +43,7 @@ abstract class GenerateToreadBuildConfig : DefaultTask() {
             // Build metadata is embedded in the client binary and must never contain credentials.
             internal object GeneratedToreadBuildConfig {
                 const val serverBaseUrl: String = "$escapedServerBaseUrl"
+                const val appVersion: String = "$escapedAppVersion"
             }
             """.trimIndent() + "\n",
         )
@@ -80,6 +88,7 @@ val configuredServerBaseUrl = providers
 val generateToreadBuildConfig = tasks.register<GenerateToreadBuildConfig>("generateToreadBuildConfig") {
     description = "Generates non-secret Toread client build configuration."
     serverBaseUrl.set(configuredServerBaseUrl)
+    appVersion.set(libs.versions.toread.app)
     outputDirectory.set(generatedToreadBuildConfigDirectory)
 }
 
