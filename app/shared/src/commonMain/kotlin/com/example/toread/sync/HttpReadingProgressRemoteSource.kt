@@ -105,7 +105,11 @@ private val RemoteProgressJson = Json {
     explicitNulls = false
 }
 
-private const val RemoteProgressHttpTimeoutMillis = 3_000L
+/**
+ * The compensation GET runs in the background and its result is optional, but it still deserves the
+ * same weak-network budget as the other calls: 3 seconds reported "云端进度暂不可用" for a slow answer.
+ */
+private const val RemoteProgressHttpTimeoutMillis = 15_000L
 private const val RemoteProgressUnavailableMessage = "云端进度暂不可用，请稍后重试。"
 private const val RemoteProgressFetchFailedMessage = "云端进度获取失败，请稍后重试。"
 private const val LoginRequiredForSyncMessage = "请先登录后再同步。"

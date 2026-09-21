@@ -24,7 +24,10 @@ class AuthClient(
     private val baseUrlProvider: () -> String,
     private val client: HttpClient = HttpClient {
         install(HttpTimeout) {
-            connectTimeoutMillis = AuthHttpTimeoutMillis
+            // Connect and read are split on purpose: on a weak link the connect (DNS + TCP + TLS) is
+            // what stalls, and failing that in 8s lets the caller retry while the link is still warm,
+            // while a slow-but-alive response gets the full 20s to arrive.
+            connectTimeoutMillis = AuthConnectTimeoutMillis
             requestTimeoutMillis = AuthHttpTimeoutMillis
             socketTimeoutMillis = AuthHttpTimeoutMillis
         }
@@ -263,12 +266,13 @@ private val AuthHttpJson = Json {
 }
 
 /**
- * Login and registration share the refresh call's budget. They used to run on a 3-second connect/read
- * timeout, which a weak mobile network blows routinely — and every such failure surfaced as "登录服务暂
- * 不可用", blaming the server for a lost packet.
+ * Login and registration share the refresh call's read budget. They used to run on a 3-second
+ * connect/read timeout, which a weak mobile network blows routinely — and every such failure surfaced
+ * as "登录服务暂不可用", blaming the server for a lost packet.
  */
-private const val AuthHttpTimeoutMillis = 15_000L
-private const val AuthRefreshHttpTimeoutMillis = 15_000L
+private const val AuthHttpTimeoutMillis = 20_000L
+private const val AuthConnectTimeoutMillis = 8_000L
+private const val AuthRefreshHttpTimeoutMillis = 20_000L
 private const val HealthCheckHttpTimeoutMillis = 8_000L
 private const val InvalidRefreshTokenError = "invalid_refresh_token"
 private const val NetworkServiceUnavailableMessage = "网络服务暂不可用，请稍后重试。"

@@ -86,7 +86,11 @@ private val SyncHttpJson = Json {
     explicitNulls = false
 }
 
-private const val SyncHttpTimeoutMillis = 3_000L
+/**
+ * Uploads are retried from the queue, so a weak link should fail *slowly* rather than fail *often*: 3
+ * seconds turned every congested moment into a failed upload and a bumped retry count.
+ */
+private const val SyncHttpTimeoutMillis = 15_000L
 private const val SyncServiceUnavailableMessage = "同步服务暂不可用，请稍后重试。"
 private const val LoginRequiredForSyncMessage = "请先登录后再同步。"
 private const val SyncFailedMessage = "同步失败，请稍后重试。"

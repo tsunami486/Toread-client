@@ -128,7 +128,8 @@ private val BookSyncHttpJson = Json {
     explicitNulls = false
 }
 
-private const val BookSyncHttpTimeoutMillis = 3_000L
+/** Same reasoning as the progress uploader: the queue retries, so do not fail fast on a weak link. */
+private const val BookSyncHttpTimeoutMillis = 15_000L
 private const val SyncServiceUnavailableMessage = "同步服务暂不可用，请稍后重试。"
 private const val LoginRequiredForSyncMessage = "请先登录后再同步。"
 private const val SyncFailedMessage = "同步失败，请稍后重试。"
