@@ -114,6 +114,24 @@ class LocalSettingsRepository(
         )
     }
 
+    /**
+     * The last auth events, newest last, one compact line each. Device-level diagnostics only: they are
+     * never synced and never contain a token, so they can be read back from the database after an
+     * incident on a device that cannot be attached to a debugger.
+     */
+    fun authDiagnostics(): List<String> =
+        readSetting(AuthDiagnosticsKey)
+            ?.split('\n')
+            ?.filter { it.isNotBlank() }
+            .orEmpty()
+
+    fun setAuthDiagnostics(entries: List<String>) {
+        saveSetting(
+            AuthDiagnosticsKey,
+            entries.filter { it.isNotBlank() }.joinToString("\n"),
+        )
+    }
+
     fun androidPdfReaderPreferences(): AndroidPdfReaderPreferences =
         AndroidPdfReaderPreferences(
             landscapeDoublePageEnabled = readBooleanSetting(
@@ -360,6 +378,7 @@ class LocalSettingsRepository(
         const val ReaderNightModeKey = "reader.night_mode_enabled"
         const val ReaderNightFollowSystemKey = "reader.night_mode_follow_system"
         const val PinnedBooksKey = "bookshelf.pinned_hashes"
+        const val AuthDiagnosticsKey = "auth.diagnostics"
         const val CategoryDictionaryKey = "library.category_dictionary"
         const val CategoryMemoryKey = "library.category_memory"
         const val AutoCategorizeKey = "library.auto_categorize_enabled"

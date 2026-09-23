@@ -34,7 +34,11 @@ import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
 import com.example.toread.auth.AuthClient
 import com.example.toread.auth.AuthClientResult
+import com.example.toread.auth.AuthDiagnostics
+import com.example.toread.auth.AuthRefreshTrigger
+import com.example.toread.auth.ambiguousRetryDelayMillis
 import com.example.toread.auth.isConfirmedInvalidRefreshToken
+import com.example.toread.auth.maySpendRefreshRotation
 import com.example.toread.config.ServerBaseUrlConfig
 import com.example.toread.importing.BookImportResult
 import com.example.toread.importing.BookImportService
@@ -80,9 +84,14 @@ import com.example.toread.ui.text.ToreadStrings
 import com.example.toread.ui.theme.ToreadTheme
 import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.withTimeoutOrNull
+import kotlin.time.Duration.Companion.milliseconds
+import kotlin.time.TimeMark
+import kotlin.time.TimeSource
 
 internal enum class ToreadScreen {
     CheckingAuth,
@@ -133,6 +142,12 @@ fun ToreadApp() {
     var authSessionExpiresInSeconds by remember { mutableStateOf<Long?>(null) }
     var scheduledAuthRefreshRetry by remember { mutableStateOf(false) }
     var authRefreshRetryAttempt by remember { mutableIntStateOf(0) }
+    // Rotation bookkeeping for weak networks: a flapping link used to spend a rotation on every
+    // reconnect, and every rotation is one the same link can lose. See `AuthRefreshPolicy`.
+    var lastRefreshSuccessAt by remember { mutableStateOf<TimeMark?>(null) }
+    var lastRefreshAttemptAt by remember { mutableStateOf<TimeMark?>(null) }
+    var lastRefreshAttemptAmbiguous by remember { mutableStateOf(false) }
+    var accessTokenRenewalAt by remember { mutableStateOf<TimeMark?>(null) }
     var appearance by remember { mutableStateOf(ToreadAppearancePreferences()) }
     // Shelf pinning is a device-level arrangement: the hashes live in the settings, newest pin first.
     var pinnedBookHashes by remember { mutableStateOf<List<String>>(emptyList()) }
@@ -173,6 +188,45 @@ fun ToreadApp() {
         } else {
             null
         }
+    }
+    // Device-local history of auth events, so an incident on a weak network can be explained after the
+    // fact without a console (Android has logcat but needs a cable; the packaged desktop build has none).
+    val authDiagnostics = remember(settingsRepository) {
+        settingsRepository?.let { repository ->
+            AuthDiagnostics(
+                read = { repository.authDiagnostics() },
+                write = { entries -> repository.setAuthDiagnostics(entries) },
+                nowIsoString = { PlatformProgressClock().nowIsoString() },
+            )
+        }
+    }
+
+    fun millisSince(mark: TimeMark?): Long? = mark?.elapsedNow()?.inWholeMilliseconds
+
+    /** Whether the in-memory access token has reached the point where a rotation is worth spending. */
+    fun accessTokenNeedsRenewal(): Boolean =
+        !authSessionReady || accessTokenRenewalAt?.hasPassedNow() ?: true
+
+    fun refreshTriggerAllowed(trigger: AuthRefreshTrigger): Boolean =
+        maySpendRefreshRotation(
+            trigger = trigger,
+            millisSinceLastSuccessfulRefresh = millisSince(lastRefreshSuccessAt),
+            millisSinceLastAttempt = millisSince(lastRefreshAttemptAt),
+            previousAttemptAmbiguous = lastRefreshAttemptAmbiguous,
+            accessTokenWithinSafetyWindow = accessTokenNeedsRenewal(),
+        )
+
+    /** Logs why a non-deadline trigger was refused, so a flapping session is explainable afterwards. */
+    fun logRefreshSkipped(trigger: AuthRefreshTrigger, reason: String) {
+        ToreadClientLog.info(
+            AuthLogArea,
+            "auth.refresh_skipped",
+            "reason" to reason,
+            "trigger" to trigger.name.lowercase(),
+            "sinceSuccessMs" to millisSince(lastRefreshSuccessAt),
+            "sinceAttemptMs" to millisSince(lastRefreshAttemptAt),
+            "ambiguous" to lastRefreshAttemptAmbiguous,
+        )
     }
     val serverConnectionMonitor = remember(appScope, authClient) {
         authClient?.let { client ->
@@ -348,6 +402,8 @@ fun ToreadApp() {
                 reason = reason,
                 result = result,
                 retryAttempt = authRefreshRetryAttempt,
+                diagnostics = authDiagnostics,
+                sinceLastSuccessMillis = millisSince(lastRefreshSuccessAt),
             )
             when (result) {
                 is AuthClientResult.Success -> {
@@ -366,6 +422,15 @@ fun ToreadApp() {
                     scheduledAuthRefreshRetry = false
                     authRefreshRetryAttempt = 0
                     authSessionGeneration++
+                    // Rotation bookkeeping: the next environment trigger must not spend another
+                    // rotation before this one is old enough, and the deadline comes from the server's
+                    // own expires_in rather than from a client guess.
+                    val now = TimeSource.Monotonic.markNow()
+                    lastRefreshAttemptAt = now
+                    lastRefreshAttemptAmbiguous = false
+                    lastRefreshSuccessAt = now
+                    accessTokenRenewalAt = now +
+                        accessTokenRefreshDelayMillis(result.session.expiresInSeconds).milliseconds
                     if (
                         autoSyncEnabled &&
                         pendingAutomaticRefresh?.remoteRefreshPending != true
@@ -386,6 +451,11 @@ fun ToreadApp() {
                     ) {
                         return@withLock false
                     }
+                    lastRefreshAttemptAt = TimeSource.Monotonic.markNow()
+                    // A response that never arrived is ambiguous: the server may already have rotated,
+                    // so the next attempt has to wait out the ambiguous floor instead of burning the
+                    // chain's replay budget within the same minute.
+                    lastRefreshAttemptAmbiguous = result.httpStatus == null
                     if (result.isConfirmedInvalidRefreshToken()) {
                         tokenStore.clear()
                         repository.clearAuthMode()
@@ -401,8 +471,21 @@ fun ToreadApp() {
                             "auth.session_cleared",
                             "reason" to reason,
                             "cause" to "invalid_refresh_token",
+                            // Tells "we lost responses for too long / ran past the replay grace" apart
+                            // from "someone invalidated the chain": both end in the same verdict.
+                            "sinceSuccessMs" to millisSince(lastRefreshSuccessAt),
+                            "ambiguousAttempts" to authRefreshRetryAttempt,
                         )
-                        showAppMessage(ToreadStrings.LoginExpired)
+                        authDiagnostics?.record(
+                            event = "session_cleared",
+                            reason = reason,
+                            cause = "invalid_refresh_token",
+                            extra = arrayOf(
+                                "sinceSuccessMs" to millisSince(lastRefreshSuccessAt),
+                                "ambiguousAttempts" to authRefreshRetryAttempt,
+                            ),
+                        )
+                        showAppMessage(ToreadStrings.LoginExpiredLocalDataSafe)
                         false
                     } else {
                         authSessionReady = false
@@ -549,7 +632,13 @@ fun ToreadApp() {
         }
 
         val delayMillis = if (scheduledAuthRefreshRetry) {
-            authRefreshRetryDelayMillis(authRefreshRetryAttempt)
+            // An ambiguous attempt may already have rotated server-side, so its retry waits out the
+            // longer floor; a rejected/expired attempt keeps the plain backoff.
+            if (lastRefreshAttemptAmbiguous) {
+                ambiguousRetryDelayMillis(authRefreshRetryAttempt)
+            } else {
+                authRefreshRetryDelayMillis(authRefreshRetryAttempt)
+            }
         } else {
             if (!authSessionReady) return@LaunchedEffect
             accessTokenRefreshDelayMillis(authSessionExpiresInSeconds ?: return@LaunchedEffect)
@@ -570,20 +659,32 @@ fun ToreadApp() {
             progressSyncScheduler.flushNow()
         }
         AppBackgroundNotifier.setOnEnterForeground {
+            // Health check first, refresh second: firing both at once meant the refresh raced the very
+            // check that would have told it the link is not usable yet, and every such race lost a
+            // rotation on a weak network.
             serverConnectionMonitor?.triggerCheck("app_foreground")
-            if (settingsRepository?.currentAuthMode() == AuthMode.LoggedIn) {
+            appScope.launch {
+                val monitor = serverConnectionMonitor
+                val online = monitor == null || withTimeoutOrNull(ForegroundOnlineWaitMillis) {
+                    monitor.state.first { it is ServerConnectionState.Online }
+                } != null
+                if (!online) return@launch
+                if (settingsRepository?.currentAuthMode() != AuthMode.LoggedIn) return@launch
+                if (!refreshTriggerAllowed(AuthRefreshTrigger.Environment)) {
+                    // The in-memory token is still good enough; do not spend a rotation on a reconnect.
+                    logRefreshSkipped(AuthRefreshTrigger.Environment, AuthRefreshReasonForeground)
+                    return@launch
+                }
                 authSessionReady = false
-                appScope.launch {
-                    val restored = refreshAuthSessionIfNeeded(
-                        force = true,
-                        reason = AuthRefreshReasonForeground,
-                    )
-                    if (restored && autoSyncEnabled) {
-                        pendingAutomaticRefresh = createPendingAutomaticRefresh(
-                            source = "app_foreground",
-                            mode = AutomaticBookshelfRefresh.RemoteAfterSessionRestore,
-                        ).copy(localRefreshPending = false)
-                    }
+                val restored = refreshAuthSessionIfNeeded(
+                    force = true,
+                    reason = AuthRefreshReasonForeground,
+                )
+                if (restored && autoSyncEnabled) {
+                    pendingAutomaticRefresh = createPendingAutomaticRefresh(
+                        source = "app_foreground",
+                        mode = AutomaticBookshelfRefresh.RemoteAfterSessionRestore,
+                    ).copy(localRefreshPending = false)
                 }
             }
         }
@@ -681,21 +782,33 @@ fun ToreadApp() {
                     )
                 }
                 if (shouldRefreshAuth) {
-                    val restored = refreshAuthSessionIfNeeded(
-                        force = wasOffline || !authSessionReady,
-                        reason = AuthRefreshReasonServerOnline,
-                    )
-                    if (
-                        restored &&
-                        wasOffline &&
-                        autoSyncEnabled &&
-                        settingsRepository?.currentAuthMode() == AuthMode.LoggedIn &&
-                        pendingAutomaticRefresh?.remoteRefreshPending != true
-                    ) {
-                        pendingAutomaticRefresh = createPendingAutomaticRefresh(
-                            source = "server_reconnected",
-                            mode = AutomaticBookshelfRefresh.RemoteAfterSessionRestore,
-                        ).copy(localRefreshPending = false)
+                    // A deadline or a missing token goes through immediately; a plain reconnect has to
+                    // pass the trigger floor, because a flapping link reconnects every few seconds and
+                    // each reconnect used to spend a rotation the same link could lose.
+                    val trigger = if (!authSessionReady) {
+                        AuthRefreshTrigger.SessionMissing
+                    } else {
+                        AuthRefreshTrigger.Environment
+                    }
+                    if (authSessionReady && !refreshTriggerAllowed(trigger)) {
+                        logRefreshSkipped(trigger, AuthRefreshReasonServerOnline)
+                    } else {
+                        val restored = refreshAuthSessionIfNeeded(
+                            force = wasOffline || !authSessionReady,
+                            reason = AuthRefreshReasonServerOnline,
+                        )
+                        if (
+                            restored &&
+                            wasOffline &&
+                            autoSyncEnabled &&
+                            settingsRepository?.currentAuthMode() == AuthMode.LoggedIn &&
+                            pendingAutomaticRefresh?.remoteRefreshPending != true
+                        ) {
+                            pendingAutomaticRefresh = createPendingAutomaticRefresh(
+                                source = "server_reconnected",
+                                mode = AutomaticBookshelfRefresh.RemoteAfterSessionRestore,
+                            ).copy(localRefreshPending = false)
+                        }
                     }
                 }
             }
@@ -1080,20 +1193,35 @@ private fun logAuthRefreshResult(
     reason: String,
     result: AuthClientResult,
     retryAttempt: Int,
+    diagnostics: AuthDiagnostics?,
+    sinceLastSuccessMillis: Long?,
 ) {
     val failure = result as? AuthClientResult.Failure
+    val outcome = when {
+        result is AuthClientResult.Success -> "ok"
+        failure?.isConfirmedInvalidRefreshToken() == true -> "rejected"
+        else -> "ambiguous"
+    }
     ToreadClientLog.info(
         AuthLogArea,
         "auth.refresh_result",
         "reason" to reason,
-        "outcome" to when {
-            result is AuthClientResult.Success -> "ok"
-            failure?.isConfirmedInvalidRefreshToken() == true -> "rejected"
-            else -> "ambiguous"
-        },
+        "outcome" to outcome,
         "httpStatus" to failure?.httpStatus,
         "errorCode" to failure?.error,
         "retryAttempt" to retryAttempt,
+        "sinceSuccessMs" to sinceLastSuccessMillis,
+    )
+    diagnostics?.record(
+        event = "refresh_result",
+        reason = reason,
+        cause = outcome,
+        extra = arrayOf(
+            "httpStatus" to failure?.httpStatus,
+            "errorCode" to failure?.error,
+            "retryAttempt" to retryAttempt,
+            "sinceSuccessMs" to sinceLastSuccessMillis,
+        ),
     )
 }
 
@@ -1114,6 +1242,9 @@ private const val AuthRefreshReasonRetry = "auth_refresh_retry"
 private const val AuthRefreshReasonForeground = "app_foreground"
 private const val AuthRefreshReasonServerOnline = "server_online"
 private val AuthRefreshRetryDelaysMillis = listOf(30_000L, 60_000L, 120_000L, 300_000L)
+
+/** How long the foreground refresh waits for the health check before giving up on this resume. */
+private const val ForegroundOnlineWaitMillis = 8_000L
 private const val AccessTokenRefreshMinSafetyWindowMillis = 5_000L
 private const val AccessTokenRefreshMaxSafetyWindowMillis = 5 * 60_000L
 private const val AccessTokenRefreshMinimumDelayMillis = 1_000L
