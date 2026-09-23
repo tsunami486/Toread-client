@@ -30,6 +30,7 @@ import com.example.toread.platform.AndroidReaderDeviceControlsBridge
 import com.example.toread.platform.AndroidSystemBarsBridge
 import com.example.toread.platform.ImagePickResult
 import com.example.toread.platform.PlatformFile
+import com.example.toread.platform.SharedFileInbox
 import kotlinx.coroutines.CompletableDeferred
 
 class MainActivity : ComponentActivity() {
@@ -152,7 +153,47 @@ class MainActivity : ComponentActivity() {
         )
 
         runToreadAndroidApp()
+        handleIncomingIntent(intent)
     }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        handleIncomingIntent(intent)
+    }
+
+    /**
+     * Books another app handed over: "open with" (ACTION_VIEW) and share (ACTION_SEND /
+     * ACTION_SEND_MULTIPLE). The URIs go into [SharedFileInbox] and are imported through the same
+     * service as the in-app picker. Read access to a foreign content URI lasts as long as this
+     * activity, and the import copies the file into the private book directory right away.
+     */
+    private fun handleIncomingIntent(intent: Intent?) {
+        val uris = when (intent?.action) {
+            Intent.ACTION_VIEW -> listOfNotNull(intent.data)
+            Intent.ACTION_SEND -> listOfNotNull(intent.streamUri())
+            Intent.ACTION_SEND_MULTIPLE -> intent.streamUris()
+            else -> emptyList()
+        }
+        if (uris.isEmpty()) return
+        SharedFileInbox.offer(uris.map { uri -> uri.toPlatformFile() })
+    }
+
+    @Suppress("DEPRECATION")
+    private fun Intent.streamUri(): Uri? =
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            getParcelableExtra(Intent.EXTRA_STREAM, Uri::class.java)
+        } else {
+            getParcelableExtra(Intent.EXTRA_STREAM)
+        }
+
+    @Suppress("DEPRECATION")
+    private fun Intent.streamUris(): List<Uri> =
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            getParcelableArrayListExtra(Intent.EXTRA_STREAM, Uri::class.java).orEmpty()
+        } else {
+            getParcelableArrayListExtra<Uri>(Intent.EXTRA_STREAM).orEmpty()
+        }
 
     override fun onStop() {
         AppBackgroundNotifier.notifyEnterBackground()

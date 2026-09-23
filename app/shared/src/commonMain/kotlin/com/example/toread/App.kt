@@ -49,10 +49,12 @@ import com.example.toread.logging.ToreadClientLog
 import com.example.toread.network.ServerConnectionMonitor
 import com.example.toread.network.ServerConnectionState
 import com.example.toread.progress.ApplyProgressResult
+import com.example.toread.progress.PlatformProgressClock
 import com.example.toread.progress.ReadingProgressRepository
 import com.example.toread.platform.AppBackgroundNotifier
 import com.example.toread.platform.PlatformFile
 import com.example.toread.platform.SecureTokenStore
+import com.example.toread.platform.SharedFileInbox
 import com.example.toread.reader.ReaderContentLoader
 import com.example.toread.settings.AuthMode
 import com.example.toread.settings.LocalSettingsRepository
@@ -780,6 +782,14 @@ fun ToreadApp() {
             }
             showAppMessage(message)
         }
+    }
+
+    // Books the operating system handed us rather than the user picking them in-app: an Android
+    // "open with" / share intent. The inbox is snapshot state, so an arrival recomposes and this
+    // drains it exactly once, through the same import service as the picker and the desktop drop.
+    val sharedFileCount = SharedFileInbox.size
+    LaunchedEffect(sharedFileCount) {
+        if (sharedFileCount > 0) importDroppedBooks(SharedFileInbox.drain())
     }
 
     ToreadTheme(
