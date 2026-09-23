@@ -736,12 +736,14 @@ private fun RemoteProgressFetchResult.fetchStatus(): String =
         is RemoteProgressFetchResult.Found -> "found"
         RemoteProgressFetchResult.NotFound -> "not_found"
         is RemoteProgressFetchResult.Unavailable -> "unavailable"
+        is RemoteProgressFetchResult.Unauthorized -> "unauthorized"
         is RemoteProgressFetchResult.Failed -> "failed"
     }
 
 private fun RemoteProgressFetchResult.fetchError(): String? =
     when (this) {
         is RemoteProgressFetchResult.Unavailable -> reason
+        is RemoteProgressFetchResult.Unauthorized -> reason
         is RemoteProgressFetchResult.Failed -> message
         else -> null
     }

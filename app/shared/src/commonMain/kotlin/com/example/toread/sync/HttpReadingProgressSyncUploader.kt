@@ -12,6 +12,7 @@ import io.ktor.client.request.setBody
 import io.ktor.client.statement.bodyAsText
 import io.ktor.http.ContentType
 import io.ktor.http.HttpHeaders
+import io.ktor.http.HttpStatusCode
 import io.ktor.http.isSuccess
 import io.ktor.serialization.kotlinx.json.json
 import kotlinx.serialization.SerialName
@@ -56,6 +57,10 @@ class HttpReadingProgressSyncUploader(
                     .decodeFromString(ProgressResponse.serializer(), body)
                     .toRemoteReadingProgress()
                 SyncUploadResult.Uploaded(progress)
+            } else if (response.status == HttpStatusCode.Unauthorized) {
+                // The access token expired while the connection monitor still believed it was online.
+                // Reported separately so the caller can refresh instead of retrying a doomed payload.
+                SyncUploadResult.Unauthorized(SyncUnauthorizedMessage)
             } else {
                 SyncUploadResult.Failed(SyncFailedMessage)
             }
@@ -94,3 +99,4 @@ private const val SyncHttpTimeoutMillis = 15_000L
 private const val SyncServiceUnavailableMessage = "同步服务暂不可用，请稍后重试。"
 private const val LoginRequiredForSyncMessage = "请先登录后再同步。"
 private const val SyncFailedMessage = "同步失败，请稍后重试。"
+private const val SyncUnauthorizedMessage = "登录状态已失效，正在重新登录。"

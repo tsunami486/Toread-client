@@ -62,6 +62,52 @@ class AuthClient(
             timeoutMillis = AuthRefreshHttpTimeoutMillis,
         )
 
+    /**
+     * Asks the server what it would do with this refresh token **without rotating it**.
+     *
+     * A rotation that already happened but whose response never arrived is indistinguishable from no
+     * rotation at all, so a blind retry either spends another rotation or walks into a dead chain. This
+     * probe removes the guesswork: the caller rotates only when the server says the token is still
+     * usable, and signs the reader out immediately when the server says the chain is finished.
+     *
+     * A server that predates the endpoint answers 404/405/501, and the caller rotates as before.
+     */
+    suspend fun refreshTokenStatus(refreshToken: String): RefreshStatusResult {
+        val baseUrl = baseUrlProvider().trim().trimEnd('/')
+        if (baseUrl.isBlank()) return RefreshStatusResult.Unavailable
+
+        return runCatching {
+            val response = client.post("$baseUrl/auth/refresh/status") {
+                timeout {
+                    connectTimeoutMillis = AuthConnectTimeoutMillis
+                    requestTimeoutMillis = AuthStatusHttpTimeoutMillis
+                    socketTimeoutMillis = AuthStatusHttpTimeoutMillis
+                }
+                header(HttpHeaders.ContentType, ContentType.Application.Json.toString())
+                setBody(RefreshRequest(refreshToken = refreshToken))
+            }
+            when {
+                response.status == HttpStatusCode.NotFound ||
+                    response.status == HttpStatusCode.MethodNotAllowed ||
+                    response.status == HttpStatusCode.NotImplemented -> RefreshStatusResult.Unsupported
+
+                response.status.isSuccess() -> when (
+                    response.body<RefreshStatusResponse>().state.lowercase()
+                ) {
+                    "active" -> RefreshStatusResult.Active
+                    "replayable" -> RefreshStatusResult.Replayable
+                    "rejected" -> RefreshStatusResult.Rejected
+                    else -> RefreshStatusResult.Unavailable
+                }
+
+                else -> RefreshStatusResult.Unavailable
+            }
+        }.getOrElse { throwable ->
+            if (throwable is CancellationException) throw throwable
+            RefreshStatusResult.Unavailable
+        }
+    }
+
     suspend fun checkServerConnection(): ServerConnectionResult {
         val baseUrl = baseUrlProvider().trim().trimEnd('/')
         if (baseUrl.isBlank()) {
@@ -171,6 +217,24 @@ sealed interface ServerConnectionResult {
     data class Failure(val message: String) : ServerConnectionResult
 }
 
+/** What a rotation of this refresh token would do, as reported by `POST /auth/refresh/status`. */
+sealed interface RefreshStatusResult {
+    /** The token is live: rotating it now is the normal path. */
+    data object Active : RefreshStatusResult
+
+    /** The token was already consumed, but the chain can still rotate forward, so a retry recovers it. */
+    data object Replayable : RefreshStatusResult
+
+    /** The chain is finished: rotating would answer 401, so the session is over. */
+    data object Rejected : RefreshStatusResult
+
+    /** The server does not implement the probe (older deployment): rotate as before. */
+    data object Unsupported : RefreshStatusResult
+
+    /** Nothing was learned (timeout, network, unexpected answer): rotate as before. */
+    data object Unavailable : RefreshStatusResult
+}
+
 @Serializable
 private data class RegisterRequest(
     val email: String,
@@ -189,6 +253,12 @@ private data class LoginRequest(
 private data class RefreshRequest(
     @SerialName("refresh_token")
     val refreshToken: String,
+)
+
+/** Response of `POST /auth/refresh/status`: `active`, `replayable` or `rejected`. */
+@Serializable
+private data class RefreshStatusResponse(
+    val state: String,
 )
 
 @Serializable
@@ -273,6 +343,9 @@ private val AuthHttpJson = Json {
 private const val AuthHttpTimeoutMillis = 20_000L
 private const val AuthConnectTimeoutMillis = 8_000L
 private const val AuthRefreshHttpTimeoutMillis = 20_000L
+
+/** The probe is a read-only question, so it does not need the rotation's full patience. */
+private const val AuthStatusHttpTimeoutMillis = 8_000L
 private const val HealthCheckHttpTimeoutMillis = 8_000L
 private const val InvalidRefreshTokenError = "invalid_refresh_token"
 private const val NetworkServiceUnavailableMessage = "网络服务暂不可用，请稍后重试。"

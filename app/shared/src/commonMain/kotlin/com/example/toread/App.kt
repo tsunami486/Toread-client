@@ -36,6 +36,7 @@ import com.example.toread.auth.AuthClient
 import com.example.toread.auth.AuthClientResult
 import com.example.toread.auth.AuthDiagnostics
 import com.example.toread.auth.AuthRefreshTrigger
+import com.example.toread.auth.RefreshStatusResult
 import com.example.toread.auth.ambiguousRetryDelayMillis
 import com.example.toread.auth.isConfirmedInvalidRefreshToken
 import com.example.toread.auth.maySpendRefreshRotation
@@ -228,6 +229,44 @@ fun ToreadApp() {
             "ambiguous" to lastRefreshAttemptAmbiguous,
         )
     }
+
+    /**
+     * The reader is signed out locally: the server has refused the refresh chain (or there is no token
+     * left to present). Local books, progress and queued work are deliberately untouched.
+     *
+     * @param cause tells "the chain is gone for good" apart from "we lost responses for too long",
+     *   which matters when reading the diagnostics afterwards.
+     */
+    suspend fun clearSessionAfterAuthFailure(reason: String, cause: String) {
+        tokenStore.clear()
+        settingsRepository?.clearAuthMode()
+        authSessionReady = false
+        authSessionExpiresInSeconds = null
+        scheduledAuthRefreshRetry = false
+        authRefreshRetryAttempt = 0
+        pendingAutomaticRefresh = null
+        selectedBook = null
+        screen = ToreadScreen.Auth
+        val sinceSuccessMs = millisSince(lastRefreshSuccessAt)
+        ToreadClientLog.warn(
+            AuthLogArea,
+            "auth.session_cleared",
+            "reason" to reason,
+            "cause" to cause,
+            "sinceSuccessMs" to sinceSuccessMs,
+            "ambiguousAttempts" to authRefreshRetryAttempt,
+        )
+        authDiagnostics?.record(
+            event = "session_cleared",
+            reason = reason,
+            cause = cause,
+            extra = arrayOf(
+                "sinceSuccessMs" to sinceSuccessMs,
+                "ambiguousAttempts" to authRefreshRetryAttempt,
+            ),
+        )
+        showAppMessage(ToreadStrings.LoginExpiredLocalDataSafe)
+    }
     val serverConnectionMonitor = remember(appScope, authClient) {
         authClient?.let { client ->
             ServerConnectionMonitor(
@@ -325,6 +364,17 @@ fun ToreadApp() {
                     }
                 }
                 RemoteProgressFetchResult.NotFound -> notFound++
+                is RemoteProgressFetchResult.Unauthorized -> {
+                    // The access token is stale, not the request: report it so the caller refreshes.
+                    return RemoteProgressPullSummary(
+                        checked = applied + notFound + failed,
+                        applied = applied,
+                        notFound = notFound,
+                        failed = failed,
+                        lastError = result.reason,
+                        unauthorized = true,
+                    )
+                }
                 is RemoteProgressFetchResult.Unavailable -> {
                     return RemoteProgressPullSummary(
                         checked = applied + notFound + failed,
@@ -378,23 +428,35 @@ fun ToreadApp() {
                 return@withLock true
             }
             if (refreshToken.isNullOrBlank()) {
-                tokenStore.clear()
-                repository.clearAuthMode()
-                authSessionReady = false
-                authSessionExpiresInSeconds = null
-                scheduledAuthRefreshRetry = false
-                authRefreshRetryAttempt = 0
-                pendingAutomaticRefresh = null
-                selectedBook = null
-                screen = ToreadScreen.Auth
-                ToreadClientLog.warn(
-                    AuthLogArea,
-                    "auth.session_cleared",
-                    "reason" to reason,
-                    "cause" to "missing_refresh_token",
-                )
-                showAppMessage(ToreadStrings.LoginExpired)
+                clearSessionAfterAuthFailure(reason = reason, cause = "missing_refresh_token")
                 return@withLock false
+            }
+
+            // A previous attempt whose response never arrived may already have rotated the chain. Ask the
+            // server what it would do with this token *before* spending another rotation: `rejected`
+            // means the chain is genuinely gone, so the reader is signed out now instead of retrying into
+            // a 401; `active`/`replayable` confirm a retry is worth it. A server without the probe
+            // answers 404 and the rotation proceeds exactly as before.
+            if (lastRefreshAttemptAmbiguous && lastRefreshAttemptAt != null) {
+                when (client.refreshTokenStatus(refreshToken)) {
+                    RefreshStatusResult.Rejected -> {
+                        ToreadClientLog.warn(
+                            AuthLogArea,
+                            "auth.refresh_status_rejected",
+                            "reason" to reason,
+                            "retryAttempt" to authRefreshRetryAttempt,
+                            "sinceSuccessMs" to millisSince(lastRefreshSuccessAt),
+                        )
+                        clearSessionAfterAuthFailure(reason = reason, cause = "probe_rejected")
+                        return@withLock false
+                    }
+
+                    RefreshStatusResult.Active,
+                    RefreshStatusResult.Replayable,
+                    RefreshStatusResult.Unsupported,
+                    RefreshStatusResult.Unavailable,
+                    -> Unit
+                }
             }
 
             val result = client.refresh(refreshToken)
@@ -457,35 +519,10 @@ fun ToreadApp() {
                     // chain's replay budget within the same minute.
                     lastRefreshAttemptAmbiguous = result.httpStatus == null
                     if (result.isConfirmedInvalidRefreshToken()) {
-                        tokenStore.clear()
-                        repository.clearAuthMode()
-                        authSessionReady = false
-                        authSessionExpiresInSeconds = null
-                        scheduledAuthRefreshRetry = false
-                        authRefreshRetryAttempt = 0
-                        pendingAutomaticRefresh = null
-                        selectedBook = null
-                        screen = ToreadScreen.Auth
-                        ToreadClientLog.warn(
-                            AuthLogArea,
-                            "auth.session_cleared",
-                            "reason" to reason,
-                            "cause" to "invalid_refresh_token",
-                            // Tells "we lost responses for too long / ran past the replay grace" apart
-                            // from "someone invalidated the chain": both end in the same verdict.
-                            "sinceSuccessMs" to millisSince(lastRefreshSuccessAt),
-                            "ambiguousAttempts" to authRefreshRetryAttempt,
-                        )
-                        authDiagnostics?.record(
-                            event = "session_cleared",
+                        clearSessionAfterAuthFailure(
                             reason = reason,
                             cause = "invalid_refresh_token",
-                            extra = arrayOf(
-                                "sinceSuccessMs" to millisSince(lastRefreshSuccessAt),
-                                "ambiguousAttempts" to authRefreshRetryAttempt,
-                            ),
                         )
-                        showAppMessage(ToreadStrings.LoginExpiredLocalDataSafe)
                         false
                     } else {
                         authSessionReady = false
@@ -503,11 +540,31 @@ fun ToreadApp() {
         }
     }
 
+    /**
+     * Spends a rotation for a non-deadline trigger when the policy allows it. Returns immediately:
+     * callers are composition callbacks or coroutines that must not block on the network.
+     */
+    fun refreshAuthForTrigger(trigger: AuthRefreshTrigger, reason: String) {
+        if (settingsRepository?.currentAuthMode() != AuthMode.LoggedIn) return
+        if (!refreshTriggerAllowed(trigger)) {
+            logRefreshSkipped(trigger, reason)
+            return
+        }
+        appScope.launch { refreshAuthSessionIfNeeded(force = true, reason = reason) }
+    }
+
     fun updateConnectionAfterSync(
         summary: SyncRunSummary?,
         remoteSummary: RemoteProgressPullSummary,
         source: String,
     ) {
+        // A 401 from a data call means the access token in memory is stale while the connection monitor
+        // still believes it is online. Refreshing here is what makes the session self-heal instead of
+        // waiting for the next scheduled rotation; the trigger floor keeps a 401 storm from rotating
+        // repeatedly (see AuthRefreshPolicy).
+        if (summary?.unauthorized?.let { it > 0 } == true || remoteSummary.unauthorized) {
+            refreshAuthForTrigger(AuthRefreshTrigger.Environment, AuthRefreshReasonDataUnauthorized)
+        }
         when {
             summary?.uploaded?.let { it > 0 } == true ||
                 remoteSummary.checked > 0 && remoteSummary.failed == 0 && remoteSummary.unavailableReason == null -> {
@@ -515,7 +572,9 @@ fun ToreadApp() {
             }
             summary?.failed?.let { it > 0 } == true ||
                 summary?.skipped?.let { it > 0 } == true ||
+                summary?.unauthorized?.let { it > 0 } == true ||
                 remoteSummary.failed > 0 ||
+                remoteSummary.unauthorized ||
                 remoteSummary.unavailableReason != null -> {
                 if (
                     summary?.lastError.shouldTriggerServerCheck() ||
@@ -1241,6 +1300,9 @@ private const val AuthRefreshReasonTokenExpiry = "access_token_expiry"
 private const val AuthRefreshReasonRetry = "auth_refresh_retry"
 private const val AuthRefreshReasonForeground = "app_foreground"
 private const val AuthRefreshReasonServerOnline = "server_online"
+
+/** A data call answered 401, so the in-memory access token is stale while the monitor still says online. */
+private const val AuthRefreshReasonDataUnauthorized = "data_unauthorized"
 private val AuthRefreshRetryDelaysMillis = listOf(30_000L, 60_000L, 120_000L, 300_000L)
 
 /** How long the foreground refresh waits for the health check before giving up on this resume. */
@@ -1304,4 +1366,6 @@ private data class RemoteProgressPullSummary(
     val failed: Int = 0,
     val lastError: String? = null,
     val unavailableReason: String? = null,
+    /** The server answered 401: the session needs a refresh, the books do not need a retry. */
+    val unauthorized: Boolean = false,
 )

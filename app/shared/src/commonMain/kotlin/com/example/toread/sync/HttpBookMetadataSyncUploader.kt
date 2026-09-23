@@ -10,6 +10,7 @@ import io.ktor.client.request.setBody
 import io.ktor.client.statement.bodyAsText
 import io.ktor.http.ContentType
 import io.ktor.http.HttpHeaders
+import io.ktor.http.HttpStatusCode
 import io.ktor.http.isSuccess
 import io.ktor.serialization.kotlinx.json.json
 import kotlinx.serialization.SerialName
@@ -53,6 +54,8 @@ class HttpBookMetadataSyncUploader(
                     .decodeFromString(BookResponse.serializer(), body)
                     .toRemoteBookMetadata()
                 BookMetadataUploadResult.Uploaded(book)
+            } else if (response.status == HttpStatusCode.Unauthorized) {
+                BookMetadataUploadResult.Unauthorized(SyncUnauthorizedMessage)
             } else {
                 BookMetadataUploadResult.Failed(SyncFailedMessage)
             }
@@ -69,6 +72,7 @@ interface BookMetadataSyncUploader {
 sealed interface BookMetadataUploadResult {
     data class Uploaded(val book: RemoteBookMetadata) : BookMetadataUploadResult
     data class Unavailable(val reason: String) : BookMetadataUploadResult
+    data class Unauthorized(val reason: String) : BookMetadataUploadResult
     data class Failed(val message: String) : BookMetadataUploadResult
 }
 
@@ -133,3 +137,4 @@ private const val BookSyncHttpTimeoutMillis = 15_000L
 private const val SyncServiceUnavailableMessage = "同步服务暂不可用，请稍后重试。"
 private const val LoginRequiredForSyncMessage = "请先登录后再同步。"
 private const val SyncFailedMessage = "同步失败，请稍后重试。"
+private const val SyncUnauthorizedMessage = "登录状态已失效，正在重新登录。"

@@ -33,6 +33,7 @@ class SyncQueueProcessor(
         var uploaded = 0
         var failed = 0
         var skipped = 0
+        var unauthorized = 0
         var lastError: String? = null
 
         for (item in items) {
@@ -50,6 +51,11 @@ class SyncQueueProcessor(
                             lastError = result.reason
                             break
                         }
+                        is QueueItemResult.Unauthorized -> {
+                            unauthorized++
+                            lastError = result.reason
+                            break
+                        }
                     }
                 }
                 BookMetadataEntityType -> {
@@ -62,6 +68,11 @@ class SyncQueueProcessor(
                         }
                         is QueueItemResult.Unavailable -> {
                             skipped++
+                            lastError = result.reason
+                            break
+                        }
+                        is QueueItemResult.Unauthorized -> {
+                            unauthorized++
                             lastError = result.reason
                             break
                         }
@@ -89,6 +100,7 @@ class SyncQueueProcessor(
             failed = failed,
             skipped = skipped,
             lastError = lastError,
+            unauthorized = unauthorized,
         )
     }
 
@@ -131,6 +143,16 @@ class SyncQueueProcessor(
             is SyncUploadResult.Unavailable -> {
                 logUnavailable(item, result.reason)
                 QueueItemResult.Unavailable(result.reason)
+            }
+            is SyncUploadResult.Unauthorized -> {
+                // Leave the item pending: the token, not the payload, is what needs fixing.
+                ToreadClientLog.warn(
+                    LogArea,
+                    "progress.put.unauthorized",
+                    "itemId" to item.id,
+                    "bookHash" to payload.bookHash,
+                )
+                QueueItemResult.Unauthorized(result.reason)
             }
         }
     }
@@ -178,6 +200,15 @@ class SyncQueueProcessor(
             is BookMetadataUploadResult.Unavailable -> {
                 logUnavailable(item, result.reason)
                 QueueItemResult.Unavailable(result.reason)
+            }
+            is BookMetadataUploadResult.Unauthorized -> {
+                ToreadClientLog.warn(
+                    LogArea,
+                    "book.put.unauthorized",
+                    "itemId" to item.id,
+                    "bookHash" to payload.bookHash,
+                )
+                QueueItemResult.Unauthorized(result.reason)
             }
         }
     }
@@ -325,6 +356,13 @@ private sealed interface QueueItemResult {
     data object Uploaded : QueueItemResult
     data class Failed(val message: String) : QueueItemResult
     data class Unavailable(val reason: String) : QueueItemResult
+
+    /**
+     * The server answered 401: the access token in memory is stale, not the request. The item stays
+     * pending and the caller refreshes the session — otherwise every sync keeps failing until the next
+     * scheduled refresh, which on a weak network can be minutes away.
+     */
+    data class Unauthorized(val reason: String) : QueueItemResult
 }
 
 interface ReadingProgressSyncUploader {
@@ -334,6 +372,7 @@ interface ReadingProgressSyncUploader {
 sealed interface SyncUploadResult {
     data class Uploaded(val progress: RemoteReadingProgress) : SyncUploadResult
     data class Unavailable(val reason: String) : SyncUploadResult
+    data class Unauthorized(val reason: String) : SyncUploadResult
     data class Failed(val message: String) : SyncUploadResult
 }
 
@@ -343,6 +382,8 @@ data class SyncRunSummary(
     val failed: Int,
     val skipped: Int,
     val lastError: String?,
+    /** Items the server rejected with 401, so the caller knows to refresh the session. */
+    val unauthorized: Int = 0,
 )
 
 private enum class SyncStatus(val value: String) {

@@ -103,6 +103,38 @@ class SyncQueueProcessorTest {
     }
 
     @Test
+    fun unauthorizedUploadLeavesTheItemPendingAndAsksForASessionRefresh() = runBlocking {
+        val database = testDatabase()
+        insertBook(database, "hash_sync_unauthorized")
+        val progressRepository = ReadingProgressRepository(
+            database,
+            FixedSyncClock("2026-06-09T02:30:00Z"),
+        )
+        progressRepository.saveLocalProgress(
+            bookHash = "hash_sync_unauthorized",
+            format = "txt",
+            locator = TxtLocator(charOffset = 64, globalProgress = 0.2),
+            deviceId = "android",
+        )
+
+        val uploader = RecordingUploader(SyncUploadResult.Unauthorized("token expired"))
+        val processor = SyncQueueProcessor(database, uploader, FixedSyncClock("2026-06-09T02:31:00Z"))
+
+        val summary = processor.flushPending()
+
+        // A 401 is the token's problem, not the payload's: the item must stay pending (not failed, not
+        // "synced") so the next flush after the session refresh uploads it, and the caller must be told.
+        assertEquals(1, summary.unauthorized)
+        assertEquals(0, summary.failed)
+        assertEquals(0, summary.uploaded)
+        val queue = database.toreadDatabaseQueries
+            .selectSyncQueueItemById("progress_hash_sync_unauthorized_2026-06-09T02:30:00Z")
+            .executeAsOne()
+        assertEquals("pending", queue.sync_status)
+        assertEquals(0, queue.retry_count)
+    }
+
+    @Test
     fun flushPendingUploadsOnlyLatestReadingProgressForEachBook() = runBlocking {
         val database = testDatabase()
         insertBook(database, "hash_sync_coalesce")

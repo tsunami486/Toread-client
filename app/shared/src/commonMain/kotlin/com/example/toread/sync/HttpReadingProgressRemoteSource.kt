@@ -47,6 +47,8 @@ class HttpReadingProgressRemoteSource(
             }
             when {
                 response.status == HttpStatusCode.NotFound -> RemoteProgressFetchResult.NotFound
+                response.status == HttpStatusCode.Unauthorized ->
+                    RemoteProgressFetchResult.Unauthorized(RemoteProgressUnauthorizedMessage)
                 response.status.isSuccess() -> {
                     val body = response.bodyAsText()
                     val progress = RemoteProgressJson.decodeFromString(ProgressResponse.serializer(), body)
@@ -68,6 +70,7 @@ sealed interface RemoteProgressFetchResult {
     data class Found(val progress: RemoteReadingProgress) : RemoteProgressFetchResult
     data object NotFound : RemoteProgressFetchResult
     data class Unavailable(val reason: String) : RemoteProgressFetchResult
+    data class Unauthorized(val reason: String) : RemoteProgressFetchResult
     data class Failed(val message: String) : RemoteProgressFetchResult
 }
 
@@ -111,5 +114,6 @@ private val RemoteProgressJson = Json {
  */
 private const val RemoteProgressHttpTimeoutMillis = 15_000L
 private const val RemoteProgressUnavailableMessage = "云端进度暂不可用，请稍后重试。"
+private const val RemoteProgressUnauthorizedMessage = "登录状态已失效，正在重新登录。"
 private const val RemoteProgressFetchFailedMessage = "云端进度获取失败，请稍后重试。"
 private const val LoginRequiredForSyncMessage = "请先登录后再同步。"
