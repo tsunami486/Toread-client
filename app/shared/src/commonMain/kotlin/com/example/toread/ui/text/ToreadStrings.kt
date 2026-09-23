@@ -48,6 +48,7 @@ object ToreadStrings {
     const val RemoteProgressSourceUnavailable = "远端进度服务未初始化"
     const val LocalProgressServiceUnavailable = "本地进度服务未初始化"
     const val LoginExpired = "登录状态已过期，请重新登录。"
+    const val LoginExpiredLocalDataSafe = "登录状态已过期，请重新登录；本地书籍与阅读进度不受影响。"
     const val ServerConnectionMonitorUnavailable = "连接监控未初始化"
     const val ServerOfflineSnackbar = "连接服务器失败，当前为离线状态。"
     const val ServerReconnectedSnackbar = "已重新连接服务器"
@@ -220,7 +221,7 @@ object ToreadStrings {
     const val PinnedBadgeDescription = "已置顶"
     const val DeleteBookTitle = "删除这本书？"
     fun deleteBookMessage(title: String): String =
-        "《$title》将从本机书架移除，本地副本、阅读进度与笔记都会删除；服务器上的记录不受影响。"
+        "《$title》将从本机书架移除，本地副本与阅读进度都会删除；服务器上的记录不受影响。"
     const val DeleteBookConfirm = "删除"
     const val DeleteBookDone = "已从书架移除。"
     const val DeleteBookFailed = "删除失败，请重试。"
@@ -378,11 +379,11 @@ object ToreadStrings {
     // Build-injected so the label always matches the shipped package version
     // (版本目录 gradle/libs.versions.toml 的 toread-app).
     val VersionLabel: String get() = "版本 " + GeneratedToreadBuildConfig.appVersion
-    const val AboutDescription = "导入型个人阅读器。本地阅读 EPUB、PDF 和 TXT，同步阅读进度、书签与笔记。"
+    const val AboutDescription = "导入型个人阅读器。本地阅读 EPUB、PDF 和 TXT，同步阅读进度与书籍信息。"
     const val LogoutState = "退出登录状态"
     const val LogoutLocalOnlyHint = "退出后仅清除本地 token，本地书籍与同步数据将保留。"
     const val AutoSync = "自动同步"
-    const val AutoSyncDescription = "联网后自动同步阅读进度、书签与笔记。"
+    const val AutoSyncDescription = "联网后自动同步阅读进度与书籍信息。"
     const val DynamicColor = "动态取色"
     const val DynamicColorDescription = "使用系统强调色。"
     const val LocalStorage = "本地存储"
