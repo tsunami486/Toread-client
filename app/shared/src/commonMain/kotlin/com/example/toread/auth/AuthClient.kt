@@ -159,6 +159,7 @@ class AuthClient(
                     message = error.message,
                     error = error.error,
                     httpStatus = response.status.value,
+                    tokenHint = error.tokenHint,
                 )
             }
 
@@ -195,11 +196,14 @@ sealed interface AuthClientResult {
      * @param httpStatus status of a server response, or `null` when the request never produced one
      *   (network failure, timeout, malformed body). Only a server response can confirm that a
      *   refresh token is invalid, so a `null` status must stay ambiguous for the caller.
+     * @param tokenHint the server's sanitized explanation of a rejected refresh token, when it sent one;
+     *   diagnostics only, see [AuthTokenHint].
      */
     data class Failure(
         val message: String,
         val error: String? = null,
         val httpStatus: Int? = null,
+        val tokenHint: AuthTokenHint? = null,
     ) : AuthClientResult
 }
 
@@ -233,6 +237,36 @@ sealed interface RefreshStatusResult {
 
     /** Nothing was learned (timeout, network, unexpected answer): rotate as before. */
     data object Unavailable : RefreshStatusResult
+}
+
+/**
+ * Why the server says a refresh token is gone, when it chooses to say anything.
+ *
+ * `POST /auth/refresh` may answer a 401 with `token_hint`. It is a diagnostic, never a decision: this
+ * client signs out for the same reason with or without it. What it buys is an incident that can be read
+ * back afterwards — `auth.diagnostics` can then say "another device took the chain over" or "we lost too
+ * many responses in a row" instead of one indistinguishable "登录状态已过期".
+ *
+ * Only these three values are accepted; anything else is dropped rather than stored, so a server cannot
+ * write arbitrary text into this device's settings row.
+ */
+enum class AuthTokenHint(val wireValue: String) {
+    /** Another device signed in, or a replacement token was used: the chain moved on. */
+    Superseded("superseded"),
+
+    /** The token spent its whole lost-response replay budget; the link lost too many responses. */
+    ReplayExhausted("replay_exhausted"),
+
+    /** Expired, past the replay window, or never issued — the server collapses these on purpose. */
+    NoLongerValid("no_longer_valid"),
+    ;
+
+    companion object {
+        fun fromWire(value: String?): AuthTokenHint? {
+            val normalized = value?.trim()?.lowercase() ?: return null
+            return entries.firstOrNull { it.wireValue == normalized }
+        }
+    }
 }
 
 @Serializable
@@ -293,11 +327,14 @@ private data class TokenResponse(
 private data class ErrorResponse(
     val error: String,
     val message: String,
+    @SerialName("token_hint")
+    val tokenHint: String? = null,
 )
 
 private data class AuthErrorDetails(
     val error: String?,
     val message: String,
+    val tokenHint: AuthTokenHint? = null,
 )
 
 private suspend fun io.ktor.client.statement.HttpResponse.errorDetails(): AuthErrorDetails {
@@ -308,6 +345,7 @@ private suspend fun io.ktor.client.statement.HttpResponse.errorDetails(): AuthEr
     return AuthErrorDetails(
         error = parsed?.error,
         message = parsed.toUserMessage(),
+        tokenHint = AuthTokenHint.fromWire(parsed?.tokenHint),
     )
 }
 

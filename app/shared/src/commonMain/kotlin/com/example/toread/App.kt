@@ -36,10 +36,13 @@ import com.example.toread.auth.AuthClient
 import com.example.toread.auth.AuthClientResult
 import com.example.toread.auth.AuthDiagnostics
 import com.example.toread.auth.AuthRefreshTrigger
+import com.example.toread.auth.AuthTokenHint
 import com.example.toread.auth.RefreshStatusResult
 import com.example.toread.auth.ambiguousRetryDelayMillis
+import com.example.toread.auth.authRefreshDeadlineJitterMillis
 import com.example.toread.auth.isConfirmedInvalidRefreshToken
 import com.example.toread.auth.maySpendRefreshRotation
+import com.example.toread.auth.withAuthRefreshDeadlineJitter
 import com.example.toread.config.ServerBaseUrlConfig
 import com.example.toread.importing.BookImportResult
 import com.example.toread.importing.BookImportService
@@ -236,8 +239,18 @@ fun ToreadApp() {
      *
      * @param cause tells "the chain is gone for good" apart from "we lost responses for too long",
      *   which matters when reading the diagnostics afterwards.
+     * @param tokenHint the server's own explanation of the refusal, when it sent one
+     *   (`superseded` / `replay_exhausted` / `no_longer_valid`); it never changes the decision, only what
+     *   can be read back later.
      */
-    suspend fun clearSessionAfterAuthFailure(reason: String, cause: String) {
+    suspend fun clearSessionAfterAuthFailure(
+        reason: String,
+        cause: String,
+        tokenHint: AuthTokenHint? = null,
+    ) {
+        // Read the attempt count before resetting it: diagnostics that always report the post-reset zero
+        // cannot tell a first-refusal logout from one that followed a long lossy retry run.
+        val ambiguousAttempts = authRefreshRetryAttempt
         tokenStore.clear()
         settingsRepository?.clearAuthMode()
         authSessionReady = false
@@ -253,16 +266,18 @@ fun ToreadApp() {
             "auth.session_cleared",
             "reason" to reason,
             "cause" to cause,
+            "tokenHint" to tokenHint?.wireValue,
             "sinceSuccessMs" to sinceSuccessMs,
-            "ambiguousAttempts" to authRefreshRetryAttempt,
+            "ambiguousAttempts" to ambiguousAttempts,
         )
         authDiagnostics?.record(
             event = "session_cleared",
             reason = reason,
             cause = cause,
             extra = arrayOf(
+                "tokenHint" to tokenHint?.wireValue,
                 "sinceSuccessMs" to sinceSuccessMs,
-                "ambiguousAttempts" to authRefreshRetryAttempt,
+                "ambiguousAttempts" to ambiguousAttempts,
             ),
         )
         showAppMessage(ToreadStrings.LoginExpiredLocalDataSafe)
@@ -522,6 +537,7 @@ fun ToreadApp() {
                         clearSessionAfterAuthFailure(
                             reason = reason,
                             cause = "invalid_refresh_token",
+                            tokenHint = result.tokenHint,
                         )
                         false
                     } else {
@@ -1228,14 +1244,22 @@ internal fun automaticBookshelfRefreshAfterAuthChoice(authMode: AuthMode): Autom
         AuthMode.Guest -> AutomaticBookshelfRefresh.LocalOnly
     }
 
-internal fun accessTokenRefreshDelayMillis(expiresInSeconds: Long): Long {
+internal fun accessTokenRefreshDelayMillis(
+    expiresInSeconds: Long,
+    deadlineJitterMillis: Long = authRefreshDeadlineJitterMillis,
+): Long {
     val ttlMillis = expiresInSeconds.coerceAtLeast(1L)
         .coerceAtMost(Long.MAX_VALUE / 1_000L) * 1_000L
     val safetyWindowMillis = minOf(
         AccessTokenRefreshMaxSafetyWindowMillis,
         (ttlMillis / 10L).coerceAtLeast(AccessTokenRefreshMinSafetyWindowMillis),
     )
-    return (ttlMillis - safetyWindowMillis).coerceAtLeast(AccessTokenRefreshMinimumDelayMillis)
+    // The jitter pushes the renewal later, into the safety window the schedule already keeps, so devices
+    // that received their tokens together do not renew together — see AuthRefreshDeadlineJitterMillis.
+    return withAuthRefreshDeadlineJitter(
+        delayMillis = (ttlMillis - safetyWindowMillis).coerceAtLeast(AccessTokenRefreshMinimumDelayMillis),
+        jitterMillis = deadlineJitterMillis,
+    )
 }
 
 /**
@@ -1268,6 +1292,7 @@ private fun logAuthRefreshResult(
         "outcome" to outcome,
         "httpStatus" to failure?.httpStatus,
         "errorCode" to failure?.error,
+        "tokenHint" to failure?.tokenHint?.wireValue,
         "retryAttempt" to retryAttempt,
         "sinceSuccessMs" to sinceLastSuccessMillis,
     )
@@ -1278,6 +1303,9 @@ private fun logAuthRefreshResult(
         extra = arrayOf(
             "httpStatus" to failure?.httpStatus,
             "errorCode" to failure?.error,
+            // The server's own reason for a refusal, recorded where the refusal was first seen so the
+            // diagnostics hold it even if the process dies before the session is actually cleared.
+            "tokenHint" to failure?.tokenHint?.wireValue,
             "retryAttempt" to retryAttempt,
             "sinceSuccessMs" to sinceLastSuccessMillis,
         ),

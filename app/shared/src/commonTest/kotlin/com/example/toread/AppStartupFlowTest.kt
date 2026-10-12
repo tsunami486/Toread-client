@@ -61,9 +61,20 @@ class AppStartupFlowTest {
 
     @Test
     fun accessTokenRefreshIsScheduledBeforeExpiry() {
-        assertEquals(55 * 60_000L, accessTokenRefreshDelayMillis(expiresInSeconds = 3_600L))
-        assertEquals(5_000L, accessTokenRefreshDelayMillis(expiresInSeconds = 10L))
-        assertEquals(1_000L, accessTokenRefreshDelayMillis(expiresInSeconds = 1L))
+        // Jitter 0 here: this pins the window arithmetic, and the jitter that rides on top of it is
+        // asserted on its own (see AuthRefreshPolicyTest).
+        assertEquals(
+            55 * 60_000L,
+            accessTokenRefreshDelayMillis(expiresInSeconds = 3_600L, deadlineJitterMillis = 0L),
+        )
+        assertEquals(
+            5_000L,
+            accessTokenRefreshDelayMillis(expiresInSeconds = 10L, deadlineJitterMillis = 0L),
+        )
+        assertEquals(
+            1_000L,
+            accessTokenRefreshDelayMillis(expiresInSeconds = 1L, deadlineJitterMillis = 0L),
+        )
     }
 
     @Test

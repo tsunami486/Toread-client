@@ -1,6 +1,7 @@
 package com.example.toread.auth
 
 import com.example.toread.authRefreshRetryDelayMillis
+import kotlin.random.Random
 
 /**
  * How often a *trigger*, as opposed to a deadline, is allowed to spend a real refresh rotation.
@@ -72,6 +73,31 @@ internal fun maySpendRefreshRotation(
 /** Delay before retrying an ambiguous refresh, never shorter than the ambiguous floor. */
 internal fun ambiguousRetryDelayMillis(retryAttempt: Int): Long =
     maxOf(authRefreshRetryDelayMillis(retryAttempt), AuthRefreshAmbiguousRetryFloorMillis)
+
+/**
+ * How much later than its safety window one process may renew its access token.
+ *
+ * The safety window is derived from the server's `expires_in`, so devices that received their tokens at
+ * the same moment renew at the same moment too. That synchronisation costs little for one reader with two
+ * devices, and it costs a burst of rotations on a shared or throttled link; a small per-process draw
+ * spreads them out. It only ever *delays* a renewal, and the window it delays into is the safety margin
+ * the schedule already keeps, so a token is still renewed well before it expires.
+ */
+internal const val AuthRefreshDeadlineJitterMillis = 120_000L
+
+/** This process's renewal draw, taken once so every schedule of one launch is spread the same way. */
+internal val authRefreshDeadlineJitterMillis: Long by lazy { drawAuthRefreshDeadlineJitter() }
+
+/** Draws a renewal jitter in `0..AuthRefreshDeadlineJitterMillis`, for tests and for [authRefreshDeadlineJitterMillis]. */
+internal fun drawAuthRefreshDeadlineJitter(random: Random = Random.Default): Long =
+    random.nextLong(AuthRefreshDeadlineJitterMillis + 1L)
+
+/** The renewal delay for one schedule: the caller's window plus this process's jitter, bounded. */
+internal fun withAuthRefreshDeadlineJitter(
+    delayMillis: Long,
+    jitterMillis: Long = authRefreshDeadlineJitterMillis,
+): Long =
+    delayMillis + jitterMillis.coerceIn(0L, AuthRefreshDeadlineJitterMillis)
 
 private fun isWithin(elapsedMillis: Long?, windowMillis: Long): Boolean =
     elapsedMillis != null && elapsedMillis < windowMillis
