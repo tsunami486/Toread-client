@@ -78,6 +78,12 @@ plugins {
     alias(libs.plugins.sqldelight)
 }
 
+// Pin the generated resources package instead of letting it follow this project's Gradle path,
+// so the `toread.client.app.shared.generated.resources` imports in the sources stay valid.
+compose.resources {
+    packageOfResClass = "toread.client.app.shared.generated.resources"
+}
+
 val generatedToreadBuildConfigDirectory =
     layout.buildDirectory.dir("generated/sources/toreadBuildConfig/commonMain/kotlin")
 val configuredServerBaseUrl = providers

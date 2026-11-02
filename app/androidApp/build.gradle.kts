@@ -40,7 +40,7 @@ kotlin {
     }
 }
 dependencies {
-    implementation(project(":client:app:shared"))
+    implementation(project(":app:shared"))
 
     implementation(libs.androidx.activity.compose)
     implementation(libs.kotlinx.coroutinesCore)
