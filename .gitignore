@@ -1,0 +1,35 @@
+# Signing material — never commit a keystore or its passwords.
+*.jks
+*.keystore
+*.p12
+**/keystore.properties
+**/release.properties
+**/release-signing.properties
+.env
+.env.*
+
+# Build outputs
+.gradle/
+.kotlin/
+build/
+**/build/
+out/
+
+# IDE
+.idea/
+.vscode/
+*.iml
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Android / KMP generated
+local.properties
+captures/
+.externalNativeBuild/
+.cxx/
+**/release/
+
+# Local scratch
+/tmp/

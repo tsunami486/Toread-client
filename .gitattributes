@@ -1,0 +1,23 @@
+# Normalize line endings to LF in the repository so a Windows checkout and a
+# Linux/macOS checkout hold identical bytes, and `git status` stops reporting
+# "LF will be replaced by CRLF" on every file.
+* text=auto eol=lf
+
+# cmd.exe is happiest with CRLF batch files.
+*.bat text eol=crlf
+*.cmd text eol=crlf
+
+# Binary assets — never apply text conversion.
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.webp binary
+*.ico binary
+*.ttf binary
+*.otf binary
+*.jar binary
+*.jks binary
+*.keystore binary
+*.p12 binary
+*.dump binary
