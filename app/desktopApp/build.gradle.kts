@@ -26,6 +26,10 @@ compose.desktop {
             packageVersion = libs.versions.toread.app.get()
             windows {
                 iconFile.set(project.file("src/main/resources/tongyue-icon.ico"))
+                // Stable across releases so a later MSI upgrades this one in place instead of installing
+                // beside it. 1.0.1 shipped without an upgrade code, so this value only starts paying off
+                // from the next version on.
+                upgradeUuid = "8B3B1E4C-3D5A-4E2C-9C7B-1A2D3E4F5A6B"
             }
             linux {
                 packageName = "tongyue"
