@@ -41,6 +41,7 @@ internal fun AuthPage(
     var email by remember { mutableStateOf("") }
     var password by remember { mutableStateOf("") }
     var authError by remember { mutableStateOf<String?>(null) }
+    var authNotice by remember { mutableStateOf<String?>(null) }
     var isSubmitting by remember { mutableStateOf(false) }
 
     ScreenColumn {
@@ -50,6 +51,9 @@ internal fun AuthPage(
             fontWeight = FontWeight.SemiBold,
         )
         Text(ToreadStrings.AuthDescription)
+        authNotice?.let {
+            Text(it, color = MaterialTheme.colorScheme.primary)
+        }
         authError?.let {
             Text(it, color = MaterialTheme.colorScheme.error)
         }
@@ -80,14 +84,24 @@ internal fun AuthPage(
                     scope.launch {
                         isSubmitting = true
                         authError = null
-                        val result = if (isRegister) {
+                        authNotice = null
+                        val registering = isRegister
+                        val result = if (registering) {
                             authClient?.register(trimmedEmail, password)
                         } else {
                             authClient?.login(trimmedEmail, password)
                         }
                         when (result) {
                             is AuthClientResult.Success -> {
-                                onAuthenticated(result.session)
+                                if (registering) {
+                                    // Registering only creates the account: hand the reader back to the login
+                                    // form so the first sign-in takes the ordinary login path.
+                                    isRegister = false
+                                    password = ""
+                                    authNotice = ToreadStrings.RegisterSucceeded
+                                } else {
+                                    onAuthenticated(result.session)
+                                }
                             }
                             is AuthClientResult.Failure -> {
                                 authError = ToreadStrings.safeUserVisibleMessage(
@@ -106,13 +120,14 @@ internal fun AuthPage(
                 if (isSubmitting) {
                     CircularProgressIndicator(modifier = Modifier.size(18.dp))
                 } else {
-                    Text(if (isRegister) ToreadStrings.RegisterAndEnter else ToreadStrings.LoginAction)
+                    Text(if (isRegister) ToreadStrings.RegisterAction else ToreadStrings.LoginAction)
                 }
             }
             OutlinedButton(
                 enabled = !isSubmitting,
                 onClick = {
                     authError = null
+                    authNotice = null
                     isRegister = !isRegister
                 },
             ) {
