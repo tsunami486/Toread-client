@@ -98,6 +98,7 @@ internal fun SettingsPage(
     onBack: () -> Unit,
     onLogout: () -> Unit,
     onClearCache: () -> Unit,
+    onOpenLanSync: () -> Unit,
 ) {
     var subPage by remember { mutableStateOf<SettingsSubPage?>(null) }
     var showAboutDialog by remember { mutableStateOf(false) }
@@ -178,6 +179,7 @@ internal fun SettingsPage(
                     onOpenInterface = { subPage = SettingsSubPage.Interface },
                     onOpenAppearance = { subPage = SettingsSubPage.Appearance },
                     onOpenCategoryLexicon = { subPage = SettingsSubPage.CategoryLexicon },
+                    onOpenLanSync = onOpenLanSync,
                     onClearCache = onClearCache,
                     onAbout = { showAboutDialog = true },
                     onOpenAppFiling = { uriHandler.openUri(AppFilingQueryUrl) },
@@ -226,6 +228,7 @@ private fun SettingsOverviewContent(
     onOpenInterface: () -> Unit,
     onOpenAppearance: () -> Unit,
     onOpenCategoryLexicon: () -> Unit,
+    onOpenLanSync: () -> Unit,
     onClearCache: () -> Unit,
     onAbout: () -> Unit,
     onOpenAppFiling: () -> Unit,
@@ -262,6 +265,13 @@ private fun SettingsOverviewContent(
             checked = autoSyncEnabled,
             enabled = settingsEnabled,
             onCheckedChange = onAutoSyncEnabledChange,
+        )
+        // Device-to-device only: nothing here touches the server or a cloud copy.
+        SettingsNavigationRow(
+            symbol = ToreadSymbols.CloudSync,
+            title = ToreadStrings.SettingsLanSync,
+            description = ToreadStrings.SettingsLanSyncDescription,
+            onClick = onOpenLanSync,
         )
     }
     SettingsGroup(title = ToreadStrings.SettingsGroupStorageAndSystem) {

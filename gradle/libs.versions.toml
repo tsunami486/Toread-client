@@ -11,6 +11,7 @@ kotlinx-coroutines = "1.11.0"
 kotlinx-serialization = "1.9.0"
 ktor = "3.4.3"
 material3 = "1.11.0-alpha07"
+nanohttpd = "2.3.1"
 sqlDelight = "2.3.2"
 pdfbox = "3.0.8"
 # Single source of truth for the shipped app version: Android versionName, Desktop
@@ -42,6 +43,7 @@ ktor-clientAndroid = { module = "io.ktor:ktor-client-android", version.ref = "kt
 ktor-clientCio = { module = "io.ktor:ktor-client-cio", version.ref = "ktor" }
 ktor-clientSerializationKotlinxJson = { module = "io.ktor:ktor-serialization-kotlinx-json", version.ref = "ktor" }
 pdfbox = { module = "org.apache.pdfbox:pdfbox", version.ref = "pdfbox" }
+nanohttpd = { module = "org.nanohttpd:nanohttpd", version.ref = "nanohttpd" }
 
 [plugins]
 androidApplication = { id = "com.android.application", version.ref = "agp" }

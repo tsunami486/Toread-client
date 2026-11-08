@@ -79,7 +79,10 @@ import com.example.toread.ui.screens.BookInfoPage
 import com.example.toread.ui.screens.BookshelfLayoutMode
 import com.example.toread.ui.screens.BookshelfPage
 import com.example.toread.ui.screens.CheckingAuthPage
+import com.example.toread.lan.LanSyncEngine
+import com.example.toread.lan.lanServeRequestFromEnvironment
 import com.example.toread.ui.screens.ImportPage
+import com.example.toread.ui.screens.LanSyncPage
 import com.example.toread.ui.screens.ReaderPage
 import com.example.toread.ui.screens.SettingsPage
 import com.example.toread.ui.components.BookDropOverlay
@@ -105,6 +108,7 @@ internal enum class ToreadScreen {
     BookInfo,
     Reader,
     Settings,
+    LanSync,
 }
 
 internal enum class AutomaticBookshelfRefresh {
@@ -179,6 +183,32 @@ fun ToreadApp() {
     val importService = remember(database) { database?.let { BookImportService(it) } }
     val bookshelfRepository = remember(database) { database?.let { BookshelfRepository(it) } }
     val progressRepository = remember(database) { database?.let { ReadingProgressRepository(it) } }
+    // LAN transfer reuses the normal importer, so it needs the same two pieces the shelf already has.
+    val lanSyncEngine = remember(bookshelfRepository, importService) {
+        if (bookshelfRepository != null && importService != null) {
+            LanSyncEngine(bookshelfRepository = bookshelfRepository, importService = importService)
+        } else {
+            null
+        }
+    }
+
+    // Verification hook for `tools/dev`: opening a port needs an explicit environment variable, so an
+    // ordinary launch never listens on the network. Only the local address is logged, never the code.
+    LaunchedEffect(lanSyncEngine) {
+        val serveRequest = lanServeRequestFromEnvironment() ?: return@LaunchedEffect
+        val engine = lanSyncEngine ?: return@LaunchedEffect
+        runCatching { engine.startServing(serveRequest) }
+            .onSuccess { handle ->
+                ToreadClientLog.info("lan", "lan.serve.started", "port" to handle.port, "baseUrl" to handle.baseUrl)
+            }
+            .onFailure { error ->
+                ToreadClientLog.warn(
+                    "lan",
+                    "lan.serve.failed",
+                    "reason" to (error::class.simpleName ?: "unknown"),
+                )
+            }
+    }
     val settingsRepository = remember(database) { database?.let { LocalSettingsRepository(it) } }
     val readerContentLoader = remember { ReaderContentLoader() }
     val tokenStore = remember { SecureTokenStore() }
@@ -1159,6 +1189,13 @@ fun ToreadApp() {
                             onClearCache = {
                                 showAppMessage(ToreadStrings.NoSafeCacheToClear)
                             },
+                            onOpenLanSync = { screen = ToreadScreen.LanSync },
+                        )
+                        ToreadScreen.LanSync -> LanSyncPage(
+                            engine = lanSyncEngine,
+                            platformKind = platform.kind,
+                            onBack = { screen = ToreadScreen.Settings },
+                            onImported = { refreshKey++ },
                         )
                     }
                 }

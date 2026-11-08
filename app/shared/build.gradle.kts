@@ -139,6 +139,8 @@ kotlin {
             implementation(libs.sqldelight.sqliteDriver)
             implementation(libs.ktor.clientCio)
             implementation(libs.pdfbox)
+            // LAN serving: tiny embeddable HTTP server, used only on the desktop for now.
+            implementation(libs.nanohttpd)
         }
         commonMain.dependencies {
             implementation(libs.compose.runtime)
