@@ -57,7 +57,9 @@ android {
         applicationId = "cn.toreadapp.reader"
         minSdk = libs.versions.android.minSdk.get().toInt()
         targetSdk = libs.versions.android.targetSdk.get().toInt()
-        versionCode = 2
+        // Monotonic across releases: Android needs a larger versionCode for an in-place upgrade, and a
+        // store upload is rejected outright if it repeats one. Bump it together with `toread-app`.
+        versionCode = 3
         versionName = libs.versions.toread.app.get()
     }
     signingConfigs {
