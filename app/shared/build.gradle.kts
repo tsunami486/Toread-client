@@ -80,6 +80,8 @@ plugins {
 
 // Pin the generated resources package instead of letting it follow this project's Gradle path,
 // so the `toread.client.app.shared.generated.resources` imports in the sources stay valid.
+// Both build scripts carry it: the monorepo path already yields this name, the standalone
+// `:app:shared` does not, and identical files keep the two trees trivially comparable.
 compose.resources {
     packageOfResClass = "toread.client.app.shared.generated.resources"
 }
