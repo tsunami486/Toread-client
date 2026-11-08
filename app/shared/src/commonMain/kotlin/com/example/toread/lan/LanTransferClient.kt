@@ -37,6 +37,10 @@ internal data class LanPeerAddress(val baseUrl: String, val code: String) {
             }
             val authority = withScheme.substringAfter("://")
             if (authority.isBlank() || authority.contains('/') || authority.contains(' ')) return null
+            // Plain HTTP is only allowed to the local network, so the address must say so. Without this the
+            // app could be pointed at any cleartext host on the internet.
+            val host = authority.substringBefore(':')
+            if (!isPrivateOrLoopbackHost(host)) return null
             return LanPeerAddress(baseUrl = withScheme, code = LanPairingCode.normalize(code))
         }
     }
@@ -212,6 +216,28 @@ internal class LanTransferClient(
  * The hash, not the name, decides identity, so a lossy title is harmless — but the name still has to end
  * in a format the importer accepts, or the received file would be rejected after a full transfer.
  */
+/**
+ * `localhost` or a literal private IPv4 address (10/8, 172.16/12, 192.168/16, 127/8).
+ *
+ * The LAN link is plain HTTP, so the reachable set is deliberately narrow: a host name is refused because
+ * it can resolve anywhere, and a public literal is refused because cleartext must never leave the LAN.
+ */
+internal fun isPrivateOrLoopbackHost(host: String): Boolean {
+    val normalized = host.trim().lowercase()
+    if (normalized == "localhost") return true
+    val parts = normalized.split('.')
+    if (parts.size != 4) return false
+    val octets = parts.map { it.toIntOrNull() ?: return false }
+    if (octets.any { it !in 0..255 }) return false
+    return when {
+        octets[0] == 127 -> true
+        octets[0] == 10 -> true
+        octets[0] == 172 && octets[1] in 16..31 -> true
+        octets[0] == 192 && octets[1] == 168 -> true
+        else -> false
+    }
+}
+
 internal fun importFileName(title: String, format: String): String {
     val extension = format.trim().lowercase().takeIf { it in setOf("epub", "pdf", "txt") } ?: "epub"
     val cleaned = title

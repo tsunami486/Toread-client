@@ -16,7 +16,7 @@ sqlDelight = "2.3.2"
 pdfbox = "3.0.8"
 # Single source of truth for the shipped app version: Android versionName, Desktop
 # packageVersion, and the in-app 关于 label all read this one value.
-toread-app = "1.0.4"
+toread-app = "1.0.5"
 
 [libraries]
 kotlin-test = { module = "org.jetbrains.kotlin:kotlin-test", version.ref = "kotlin" }

@@ -443,6 +443,9 @@ object ToreadStrings {
     const val LanSyncConnect = "查看对方书架"
     const val LanSyncUnauthorized = "配对码不正确"
     const val LanSyncUnreachable = "连不上对方设备，请检查地址和网络"
+    const val LanSyncAddressInvalid = "地址需是局域网地址（例如 192.168.1.7:47901），配对码至少 6 位"
+    fun lanSyncUnreachableWith(reason: String?): String =
+        if (reason.isNullOrBlank()) LanSyncUnreachable else "连不上对方设备：$reason"
     const val LanSyncIncompatible = "对方协议版本不兼容，请把两台设备都升级到最新版"
     const val LanSyncAllPresent = "对方的书，本机都已经有了"
     const val LanSyncUnsupported = "当前平台暂不支持作为发送端，后续版本会补上"

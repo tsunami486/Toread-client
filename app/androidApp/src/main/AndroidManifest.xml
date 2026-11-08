@@ -7,7 +7,10 @@
         android:name="android.permission.READ_EXTERNAL_STORAGE"
         android:maxSdkVersion="32" />
 
-    <application android:usesCleartextTraffic="false"
+    <!-- 明文 HTTP only for the LAN book transfer: the peer is another copy of this app on the same
+         network, addressed by a private IPv4 literal that LanPeerAddress.parse refuses to accept
+         otherwise, and the API server itself stays on https. Everything else in the app is TLS. -->
+    <application android:usesCleartextTraffic="true"
         android:allowBackup="false"
         android:dataExtractionRules="@xml/data_extraction_rules"
         android:fullBackupContent="@xml/backup_rules"

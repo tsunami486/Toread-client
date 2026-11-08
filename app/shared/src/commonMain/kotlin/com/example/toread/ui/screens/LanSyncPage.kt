@@ -133,7 +133,7 @@ internal fun LanSyncPage(
     fun connect() {
         val lanEngine = engine ?: return
         val target = LanPeerAddress.parse(host, code) ?: run {
-            connectError = ToreadStrings.LanSyncUnreachable
+            connectError = ToreadStrings.LanSyncAddressInvalid
             return
         }
         connecting = true
@@ -355,7 +355,7 @@ private fun MissingBookRow(book: LanBookSummary, receiving: Boolean, enabled: Bo
 private fun lanErrorText(error: LanClientError): String = when (error) {
     LanClientError.Unauthorized -> ToreadStrings.LanSyncUnauthorized
     is LanClientError.Incompatible -> ToreadStrings.LanSyncIncompatible
-    is LanClientError.Unreachable -> ToreadStrings.LanSyncUnreachable
+    is LanClientError.Unreachable -> ToreadStrings.lanSyncUnreachableWith(error.reason)
     // A transfer that failed after the peer answered is not "unreachable": say what actually went wrong.
     // Bare reason: the receive path already prefixes it with 接收失败.
     is LanClientError.TransferFailed -> error.reason

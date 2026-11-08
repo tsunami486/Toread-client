@@ -59,7 +59,7 @@ android {
         targetSdk = libs.versions.android.targetSdk.get().toInt()
         // Monotonic across releases: Android needs a larger versionCode for an in-place upgrade, and a
         // store upload is rejected outright if it repeats one. Bump it together with `toread-app`.
-        versionCode = 5
+        versionCode = 6
         versionName = libs.versions.toread.app.get()
     }
     signingConfigs {
