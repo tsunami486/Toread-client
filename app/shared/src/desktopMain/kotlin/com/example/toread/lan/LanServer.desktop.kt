@@ -125,6 +125,9 @@ private fun booksRoot(): Path =
     Paths.get(System.getProperty("user.home"), ".toread", "books")
 
 internal actual fun lanIpv4Addresses(): List<String> =
+    prioritizedLanAddresses(rawIpv4Addresses())
+
+private fun rawIpv4Addresses(): List<String> =
     runCatching {
         NetworkInterface.getNetworkInterfaces()
             .toList()

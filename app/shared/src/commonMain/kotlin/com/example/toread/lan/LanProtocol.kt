@@ -146,3 +146,39 @@ internal expect class LanServer() {
 
 /** IPv4 addresses this device is reachable at on its local networks, for the pairing screen. */
 internal expect fun lanIpv4Addresses(): List<String>
+
+/**
+ * Orders the addresses a peer should try, and drops the ones a peer on the same Wi-Fi cannot use.
+ *
+ * A machine that also runs Tailscale (or another overlay network) has extra IPv4 addresses that look
+ * reachable but are not: `100.64.0.0/10` is carrier-grade NAT, and a phone that is not in the same tailnet
+ * simply cannot route to it. Those are filtered out instead of being shown first, because the pairing
+ * screen is typed by a human and the first address is the one they will copy.
+ */
+internal fun prioritizedLanAddresses(addresses: List<String>): List<String> =
+    addresses
+        .map(String::trim)
+        .filter { it.isNotEmpty() }
+        .distinct()
+        .filterNot(::isCarrierGradeNat)
+        .sortedBy(::lanAddressRank)
+
+private fun isCarrierGradeNat(address: String): Boolean {
+    val parts = address.split('.')
+    if (parts.size != 4) return false
+    val first = parts[0].toIntOrNull() ?: return false
+    val second = parts[1].toIntOrNull() ?: return false
+    return first == 100 && second in 64..127
+}
+
+private fun lanAddressRank(address: String): Int {
+    val parts = address.split('.')
+    val first = parts.getOrNull(0)?.toIntOrNull()
+    val second = parts.getOrNull(1)?.toIntOrNull()
+    return when {
+        first == 192 && second == 168 -> 0
+        first == 10 -> 1
+        first == 172 && second != null && second in 16..31 -> 2
+        else -> 3
+    }
+}

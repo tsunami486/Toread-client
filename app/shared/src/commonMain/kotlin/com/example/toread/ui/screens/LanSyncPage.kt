@@ -355,5 +355,8 @@ private fun MissingBookRow(book: LanBookSummary, receiving: Boolean, enabled: Bo
 private fun lanErrorText(error: LanClientError): String = when (error) {
     LanClientError.Unauthorized -> ToreadStrings.LanSyncUnauthorized
     is LanClientError.Incompatible -> ToreadStrings.LanSyncIncompatible
-    is LanClientError.Unreachable, is LanClientError.TransferFailed -> ToreadStrings.LanSyncUnreachable
+    is LanClientError.Unreachable -> ToreadStrings.LanSyncUnreachable
+    // A transfer that failed after the peer answered is not "unreachable": say what actually went wrong.
+    // Bare reason: the receive path already prefixes it with 接收失败.
+    is LanClientError.TransferFailed -> error.reason
 }

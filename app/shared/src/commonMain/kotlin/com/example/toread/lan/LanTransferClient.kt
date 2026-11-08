@@ -111,7 +111,21 @@ internal class LanTransferClient(
                 )
             }
 
-            val writer = tempFiles.open(fileName)
+            // Staging can fail for local reasons (unsupported platform, read-only cache). That is not a
+            // network problem, and reporting it as "unreachable" sent the reader chasing the peer.
+            val writer = try {
+                tempFiles.open(fileName)
+            } catch (unsupported: LanServerUnsupportedException) {
+                return LanPeerResult.Failure(
+                    LanClientError.TransferFailed("当前平台暂不支持接收文件"),
+                )
+            } catch (cancellation: CancellationException) {
+                throw cancellation
+            } catch (error: Throwable) {
+                return LanPeerResult.Failure(
+                    LanClientError.TransferFailed(error.message ?: "无法写入暂存文件"),
+                )
+            }
             var received = 0L
             try {
                 val channel = response.bodyAsChannel()

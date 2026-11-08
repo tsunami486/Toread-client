@@ -108,7 +108,13 @@ class MainActivity : ComponentActivity() {
 
         AndroidAppContext.initialize(applicationContext)
         AndroidFileAccessBridge.openInputStream = { file ->
+            // A picked file arrives as a content URI; a file this app wrote itself (a LAN download staged
+            // in cache) has only a path. Both have to reach the importer, or received books cannot be
+            // hashed or copied into the private books directory.
             file.uri?.let { uri -> contentResolver.openInputStream(Uri.parse(uri)) }
+                ?: file.path?.let { path ->
+                    runCatching { java.io.FileInputStream(path) }.getOrNull()
+                }
         }
         AndroidPlatformFilePickerBridge.pickFiles = { extensions ->
             val deferred = CompletableDeferred<List<PlatformFile>>()
